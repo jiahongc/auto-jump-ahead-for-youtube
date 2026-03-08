@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Renamed the extension to `YouTube Skip Assist` for clearer, policy-safe positioning.
+- Updated public-facing copy to emphasize supported skip assistance and metadata-dependent chapter skipping.
 - Tightened chapter matching to avoid false positives.
 - Improved YouTube SPA/navigation reliability.
 - Improved payload interception across fetch/XHR variations.

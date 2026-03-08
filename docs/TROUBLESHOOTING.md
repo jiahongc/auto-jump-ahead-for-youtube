@@ -16,7 +16,9 @@ What to do:
 
 ## Works on some videos but not others
 
-This is expected for some content. The extension depends on YouTube-provided metadata.
+This is expected for some content. The extension depends on YouTube-provided Jump Ahead or chapter metadata.
+
+It is designed as a best-effort skip assistant, so behavior can vary across accounts, regions, experiments, and video types.
 
 ## Skipped a chapter you did not want skipped
 
@@ -24,8 +26,8 @@ Chapter matching is heuristic and based on chapter titles.
 
 Workaround:
 
-1. Turn OFF `Skip Sponsored/Ad Chapters` for that session.
-2. Keep `Skip to Jump Ahead Section` ON.
+1. Turn OFF `Chapter-Based Ad Skips` for that session.
+2. Keep `YouTube Jump Ahead` ON.
 
 ## Settings not sticking
 

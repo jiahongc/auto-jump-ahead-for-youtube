@@ -1,11 +1,13 @@
 # Usage Guide
 
+This extension is positioned as supported skip assistance, not as a universal sponsor-blocking tool.
+
 ## Open Settings
 
 1. Click the extension icon in Chrome.
 2. You will see two toggles:
-   - `Skip to Jump Ahead Section`
-   - `Skip Sponsored/Ad Chapters`
+   - `YouTube Jump Ahead`
+   - `Chapter-Based Ad Skips`
 
 Both are enabled by default.
 
@@ -16,10 +18,11 @@ Both are enabled by default.
 - Uses YouTube's own Jump Ahead/seek metadata.
 - If present, playback seeks forward automatically.
 
-### Chapter-based Sponsor Skips
+### Chapter-Based Ad Skips
 
 - Reads chapter metadata from YouTube page data.
-- Skips chapters that look like sponsor/ad sections.
+- Best effort only.
+- Skips chapters that are explicitly labeled like ad/promo sections.
 - Does not skip generic intro chapters unless ad cues are present in the title.
 
 ### Music Video Rule

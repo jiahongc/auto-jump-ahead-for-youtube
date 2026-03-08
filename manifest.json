@@ -1,21 +1,31 @@
 {
   "manifest_version": 3,
-  "name": "Youtube Skip In-Video Ads",
-  "version": "1.4",
-  "description": "Automatically skips Jump ahead promotions and ad/break chapters in YouTube videos.",
-  "permissions": ["storage"],
+  "name": "YouTube Skip Assist",
+  "version": "1.6",
+  "description": "Provides supported YouTube playback skip assistance when available, with optional chapter-based ad skipping.",
+  "permissions": [
+    "storage"
+  ],
   "action": {
     "default_popup": "popup.html"
   },
   "content_scripts": [
     {
-      "matches": ["*://www.youtube.com/*"],
-      "js": ["content.js"],
+      "matches": [
+        "*://www.youtube.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["*://www.youtube.com/*"],
-      "js": ["injected.js"],
+      "matches": [
+        "*://www.youtube.com/*"
+      ],
+      "js": [
+        "injected.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     }

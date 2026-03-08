@@ -1,6 +1,6 @@
 # Privacy Policy
 
-Extension: **Youtube Skip In-Video Ads**  
+Extension: **YouTube Skip Assist**  
 Effective date: **March 6, 2026**
 
 ## Summary
@@ -12,6 +12,8 @@ This extension does not collect, sell, or transfer personal data. It runs on You
 No personal data is collected.
 
 The extension does not collect names, emails, account identifiers, browsing history outside YouTube, payment data, health data, or precise location.
+
+The extension does read YouTube page content and metadata locally on `www.youtube.com` in order to detect supported skip actions such as Jump Ahead or clearly labeled ad chapters. This processing happens on-device and is not transmitted to the developer.
 
 ## Data Stored
 
@@ -50,4 +52,4 @@ jiahong1996@gmail.com
 
 You may also open an issue:
 
-https://github.com/jiahongc/youtube-ad-skip/issues
+https://github.com/jiahongc/youtube-skip-assist/issues

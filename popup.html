@@ -3,33 +3,33 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Auto Skip Settings</title>
+  <title>YouTube Skip Assist</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <main class="panel">
-    <h1>Auto Skip</h1>
+    <h1>Skip Assist</h1>
 
     <details class="setting" open>
       <summary>
-        <span>Skip to Jump Ahead Section</span>
+        <span>YouTube Jump Ahead</span>
         <label class="switch" for="skipJumpAhead">
           <input id="skipJumpAhead" type="checkbox">
           <span class="slider"></span>
         </label>
       </summary>
-      <p>Auto-skip YouTube Jump Ahead sections and clickable skip prompts.</p>
+      <p>Automatically clicks YouTube's own Jump Ahead and related skip controls when YouTube provides them.</p>
     </details>
 
     <details class="setting" open>
       <summary>
-        <span>Skip Sponsored/Ad Chapters</span>
+        <span>Chapter-Based Ad Skips</span>
         <label class="switch" for="skipAdChapter">
           <input id="skipAdChapter" type="checkbox">
           <span class="slider"></span>
         </label>
       </summary>
-      <p>Skip chapter-marked sponsor segments (for example: "Sponsor", "Ad Break", "Paid Promotion", "Brought to you by").</p>
+      <p>Best effort. Skips chapters explicitly labeled like "Ad Break", "Paid Promotion", or similar when chapter metadata is available.</p>
     </details>
   </main>
 
