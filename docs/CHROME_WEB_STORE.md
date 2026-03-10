@@ -25,6 +25,7 @@ It primarily automates YouTube's own supported skip actions when they are availa
 
 ## Limitations
 
+- Jump Ahead is not triggered during the first video chapter to avoid false positives on content intros.
 - Behavior depends on YouTube UI availability and internal page data.
 - Results may vary by region, account state, experiment bucket, and video type.
 - Some videos do not expose a reproducible skip path.

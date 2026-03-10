@@ -330,6 +330,34 @@
     return segments;
   }
 
+  // ── First-chapter boundary helper ───────────────────────────────────────
+
+  function getFirstChapterEndMs(...dataSources) {
+    const chapterLists = [];
+    for (const data of dataSources) {
+      if (data) collectChapterLists(data, chapterLists, 0, new WeakSet());
+    }
+    const allPoints = chapterLists
+      .flatMap(rawList => rawList.map(chapterPointFromRenderer).filter(Boolean))
+      .sort((a, b) => a.startMs - b.startMs);
+
+    // Also include DOM chapter points
+    const domPoints = collectDomChapterPoints();
+    const merged = [...allPoints, ...domPoints]
+      .sort((a, b) => a.startMs - b.startMs);
+
+    // Deduplicate by startMs
+    const deduped = [];
+    let lastMs = -1;
+    for (const p of merged) {
+      if (p.startMs !== lastMs) { deduped.push(p); lastMs = p.startMs; }
+    }
+
+    // Need at least 2 chapters to define a first-chapter boundary
+    if (deduped.length < 2) return null;
+    return deduped[1].startMs;
+  }
+
   // ── Arm the auto-skip handler ────────────────────────────────────────────
 
   let activeSegments = [];
@@ -490,6 +518,22 @@
       ));
     }
 
+    // Ignore jump-ahead segments that trigger during the first video chapter
+    const firstChapterEndAll = getFirstChapterEndMs(pageData, playerResponse);
+    if (firstChapterEndAll != null) {
+      window.postMessage({ source: 'autoskip', type: 'first-chapter-end', ms: firstChapterEndAll }, '*');
+      if (jumpAhead.length) {
+        jumpAhead = jumpAhead.filter(seg => {
+          if (seg.triggerMs < firstChapterEndAll) {
+            console.log('[AutoSkip] Ignoring jump-ahead in first chapter:',
+              seg.label, 'at', (seg.triggerMs / 1000).toFixed(1) + 's');
+            return false;
+          }
+          return true;
+        });
+      }
+    }
+
     const all = [...jumpAhead, ...chapters];
     if (all.length) armSkip(all);
   }
@@ -500,13 +544,30 @@
     refreshMusicGuard();
     if (isMusicVideo) return;
 
-    const jumpAhead = settings.skipJumpAhead ? extractJumpAheadSegments(data) : [];
+    let jumpAhead = settings.skipJumpAhead ? extractJumpAheadSegments(data) : [];
     let chapters = [];
     try {
       chapters = settings.skipAdChapter ? extractChapterSegments(data) : [];
     } catch (e) {
       console.log('[AutoSkip] Chapter extraction error:', e);
     }
+
+    // Ignore jump-ahead segments that trigger during the first video chapter
+    const firstChapterEndNet = getFirstChapterEndMs(data, getPageData(), getPlayerResponse());
+    if (firstChapterEndNet != null) {
+      window.postMessage({ source: 'autoskip', type: 'first-chapter-end', ms: firstChapterEndNet }, '*');
+      if (jumpAhead.length) {
+        jumpAhead = jumpAhead.filter(seg => {
+          if (seg.triggerMs < firstChapterEndNet) {
+            console.log('[AutoSkip] Ignoring jump-ahead in first chapter:',
+              seg.label, 'at', (seg.triggerMs / 1000).toFixed(1) + 's');
+            return false;
+          }
+          return true;
+        });
+      }
+    }
+
     const all = [...jumpAhead, ...chapters];
     if (all.length) armSkip(all);
   }
@@ -522,6 +583,7 @@
     }
     handler = null;
     attachedVideo = null;
+    window.postMessage({ source: 'autoskip', type: 'first-chapter-end', ms: null }, '*');
   }
 
   // ── Triggers ─────────────────────────────────────────────────────────────
