@@ -333,6 +333,8 @@
   // ── First-chapter boundary helper ───────────────────────────────────────
 
   function getFirstChapterEndMs(...dataSources) {
+    // Only use structured YouTube API data — DOM chapter selectors can
+    // produce false positives on videos that have no real chapters.
     const chapterLists = [];
     for (const data of dataSources) {
       if (data) collectChapterLists(data, chapterLists, 0, new WeakSet());
@@ -341,15 +343,10 @@
       .flatMap(rawList => rawList.map(chapterPointFromRenderer).filter(Boolean))
       .sort((a, b) => a.startMs - b.startMs);
 
-    // Also include DOM chapter points
-    const domPoints = collectDomChapterPoints();
-    const merged = [...allPoints, ...domPoints]
-      .sort((a, b) => a.startMs - b.startMs);
-
     // Deduplicate by startMs
     const deduped = [];
     let lastMs = -1;
-    for (const p of merged) {
+    for (const p of allPoints) {
       if (p.startMs !== lastMs) { deduped.push(p); lastMs = p.startMs; }
     }
 
