@@ -9,7 +9,6 @@ const DEFAULT_SETTINGS = {
 
 let settings = { ...DEFAULT_SETTINGS };
 let musicVideoBlocked = false;
-let firstChapterEndMs = null;
 
 const SKIP_SELECTORS = [
   '.ytp-jump-ahead-button',
@@ -127,27 +126,16 @@ window.addEventListener('message', (e) => {
     musicVideoBlocked = Boolean(e.data.isMusicVideo);
   }
 
-  if (e.data.type === 'first-chapter-end') {
-    firstChapterEndMs = e.data.ms;
-  }
 });
 
 // ── MutationObserver fallback — click skip/jump button ───────────────────
 
 let lastClick = 0;
 
-function isInFirstChapter() {
-  if (firstChapterEndMs == null) return false;
-  const video = document.querySelector('video');
-  if (!video) return false;
-  return video.currentTime * 1000 < firstChapterEndMs;
-}
-
 function tryClick() {
   if (!settings.skipJumpAhead) return;
   if (musicVideoBlocked || isLikelyMusicVideoByDom()) return;
   if (Date.now() - lastClick < 800) return;
-  if (isInFirstChapter()) return;
 
   for (const sel of SKIP_SELECTORS) {
     const btn = document.querySelector(sel);

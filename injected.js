@@ -517,18 +517,15 @@
 
     // Ignore jump-ahead segments that trigger during the first video chapter
     const firstChapterEndAll = getFirstChapterEndMs(pageData, playerResponse);
-    if (firstChapterEndAll != null) {
-      window.postMessage({ source: 'autoskip', type: 'first-chapter-end', ms: firstChapterEndAll }, '*');
-      if (jumpAhead.length) {
-        jumpAhead = jumpAhead.filter(seg => {
-          if (seg.triggerMs < firstChapterEndAll) {
-            console.log('[AutoSkip] Ignoring jump-ahead in first chapter:',
-              seg.label, 'at', (seg.triggerMs / 1000).toFixed(1) + 's');
-            return false;
-          }
-          return true;
-        });
-      }
+    if (firstChapterEndAll != null && jumpAhead.length) {
+      jumpAhead = jumpAhead.filter(seg => {
+        if (seg.triggerMs < firstChapterEndAll) {
+          console.log('[AutoSkip] Ignoring jump-ahead in first chapter:',
+            seg.label, 'at', (seg.triggerMs / 1000).toFixed(1) + 's');
+          return false;
+        }
+        return true;
+      });
     }
 
     const all = [...jumpAhead, ...chapters];
@@ -551,18 +548,15 @@
 
     // Ignore jump-ahead segments that trigger during the first video chapter
     const firstChapterEndNet = getFirstChapterEndMs(data, getPageData(), getPlayerResponse());
-    if (firstChapterEndNet != null) {
-      window.postMessage({ source: 'autoskip', type: 'first-chapter-end', ms: firstChapterEndNet }, '*');
-      if (jumpAhead.length) {
-        jumpAhead = jumpAhead.filter(seg => {
-          if (seg.triggerMs < firstChapterEndNet) {
-            console.log('[AutoSkip] Ignoring jump-ahead in first chapter:',
-              seg.label, 'at', (seg.triggerMs / 1000).toFixed(1) + 's');
-            return false;
-          }
-          return true;
-        });
-      }
+    if (firstChapterEndNet != null && jumpAhead.length) {
+      jumpAhead = jumpAhead.filter(seg => {
+        if (seg.triggerMs < firstChapterEndNet) {
+          console.log('[AutoSkip] Ignoring jump-ahead in first chapter:',
+            seg.label, 'at', (seg.triggerMs / 1000).toFixed(1) + 's');
+          return false;
+        }
+        return true;
+      });
     }
 
     const all = [...jumpAhead, ...chapters];
@@ -580,7 +574,6 @@
     }
     handler = null;
     attachedVideo = null;
-    window.postMessage({ source: 'autoskip', type: 'first-chapter-end', ms: null }, '*');
   }
 
   // ── Triggers ─────────────────────────────────────────────────────────────
