@@ -104,6 +104,7 @@ function showToast(msg) {
     });
     player.appendChild(t);
   }
+  // SECURITY: use textContent, never innerHTML — msg contains untrusted chapter titles
   t.textContent = `⏭  ${msg}`;
   t.style.opacity = '1';
   clearTimeout(t._t);
@@ -114,6 +115,7 @@ function showToast(msg) {
 
 window.addEventListener('message', (e) => {
   if (e.source !== window) return;
+  if (e.origin !== 'https://www.youtube.com') return;
   if (e.data?.source !== 'autoskip') return;
 
   if (e.data.type === 'skipped') {
@@ -177,7 +179,14 @@ function clickBtn(btn, label) {
   }, 300);
 }
 
-const observer = new MutationObserver(() => tryClick());
+let clickTimer = null;
+const observer = new MutationObserver(() => {
+  if (clickTimer) return;
+  clickTimer = setTimeout(() => {
+    clickTimer = null;
+    tryClick();
+  }, 150);
+});
 if (document.body) {
   observer.observe(document.body, {
     childList: true,

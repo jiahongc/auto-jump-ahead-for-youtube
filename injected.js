@@ -91,7 +91,7 @@
         if (!text) continue;
 
         const timeMatch = text.match(/\b\d{1,2}:\d{2}(?::\d{2})?\b/);
-        const titleMatch = text.match(/[A-Za-z][A-Za-z0-9 '&/-]{2,}/);
+        const titleMatch = text.match(/[\p{L}][\p{L}\p{N}\s'&/\-]{1,}/u);
         if (!timeMatch || !titleMatch) continue;
 
         const startMs = parseTimestampToMs(timeMatch[0]);
@@ -161,21 +161,90 @@
     if (changed && isMusicVideo) reset();
   }
 
-  // Chapter title matching: strong ad signals + weak signals with context,
-  // while excluding common non-ad uses of "break".
-  const AD_STRONG_PATTERN = /\b(ad(?:vert(?:isement)?)?\s*break|commercial(?:\s*break)?|sponsor(?:ed|ship)?(?:\s*(?:segment|section|message))?|paid\s*(?:promotion|partnership)|brought to you by|in partnership with|brand deal|promo(?:tion)?|ad read)\b/i;
-  const AD_WEAK_PATTERN = /\b(partner(?:ship)?|message from|word from|thanks to)\b/i;
-  const AD_CONTEXT_PATTERN = /\b(sponsor|promo|paid|commercial|advert(?:isement)?)\b/i;
-  const AD_EXCLUDE_PATTERN = /\b(spring break|coffee break|breakdown|adventure)\b/i;
+  // ── Language & Pattern Detection ────────────────────────────────────────
+
   const INTRO_CHAPTER_PATTERN = /\b(intro|introduction|opening|cold open|welcome)\b/i;
   const INTRO_AD_ALLOW_PATTERN = /\b(ad|sponsor|sponsored|promo|promotion|paid|commercial|partner(?:ship)?|brought to you by)\b/i;
 
-  function isAdChapterTitle(title) {
-    if (!title) return false;
-    if (INTRO_CHAPTER_PATTERN.test(title) && !INTRO_AD_ALLOW_PATTERN.test(title)) return false;
-    if (AD_EXCLUDE_PATTERN.test(title)) return false;
-    if (AD_STRONG_PATTERN.test(title)) return true;
-    return AD_WEAK_PATTERN.test(title) && AD_CONTEXT_PATTERN.test(title);
+  const LANG_PATTERNS = Object.freeze({
+    en: {
+      strong:  /\b(ad(?:vert(?:isement)?)?\s*break|commercial(?:\s*break)?|sponsor(?:ed|ship)?(?:\s*(?:segment|section|message))?|paid\s*(?:promotion|partnership)|brought to you by|in partnership with|brand deal|promo(?:tion)?|ad read|product placement)\b/i,
+      weak:    /\b(partner(?:ship)?|message from|word from|thanks to)\b/i,
+      context: /\b(sponsor|promo|paid|commercial|advert(?:isement)?)\b/i,
+      exclude: /\b(spring break|coffee break|breakdown|adventure)\b/i,
+    },
+    es: {
+      strong:  /\b(pausa\s*publicitaria|patrocinado|patrocinio|publicidad|segmento\s*patrocinado|promoci[oó]n\s*pagada|cortes[ií]a\s*de)\b/i,
+      weak:    /\b(colaboraci[oó]n|anuncio|mensaje\s*de|gracias\s*a)\b/i,
+      context: /\b(patrocin|promoci[oó]n|pagad[oa]|publicidad)\b/i,
+      exclude: /\b(descanso|aventura|an[aá]lisis)\b/i,
+    },
+    pt: {
+      strong:  /\b(intervalo\s*comercial|patrocinado|patroc[ií]nio|publicidade|publi|promo[cç][aã]o\s*paga|oferecimento)\b/i,
+      weak:    /\b(parceria|an[uú]ncio|mensagem\s*de|apoio\s*de)\b/i,
+      context: /\b(patroc[ií]n|promo[cç]|pag[oa]|comercial|publicidade)\b/i,
+      exclude: /\b(descanso|aventura|an[aá]lise)\b/i,
+    },
+    de: {
+      strong:  /\b(werbepause|werbung|gesponsert|bezahlte\s*werbung|anzeige|pr[aä]sentiert\s*von|in\s*zusammenarbeit\s*mit|dauerwerbesendung)\b/i,
+      weak:    /\b(partnerschaft|nachricht\s*von|dank\s*an)\b/i,
+      context: /\b(sponsor|werbung|bezahlt|anzeige)\b/i,
+      exclude: /\b(abenteuer|zusammenbruch)\b/i,
+    },
+    fr: {
+      strong:  /\b(coupure\s*pub|publicit[eé]|sponsoris[eé]|partenariat\s*pay[eé]|pr[eé]sent[eé]\s*par|placement\s*de\s*produit)\b/i,
+      weak:    /\b(partenariat|message\s*de|merci\s*[aà])\b/i,
+      context: /\b(sponsor|promo|pay[eé]|pub(?:licit[eé])?)\b/i,
+      exclude: /\b(aventure|panne)\b/i,
+    },
+    ja: {
+      strong:  /(広告|スポンサー|(?:^|[\s【「])CM(?:$|[\s】」])|プロモーション|タイアップ|案件)/,
+      weak:    /(提供|協賛|提供元|協力|(?:^|[\s【「])PR(?:$|[\s】」]))/,
+      context: /(広告|宣伝|プロモ|スポンサー)/,
+      exclude: /(休憩|冒険)/,
+    },
+    ko: {
+      strong:  /(광고|스폰서|협찬|유료\s*광고|프로모션|PPL|브랜드\s*콘텐츠)/,
+      weak:    /(협력|제공)/,
+      context: /(광고|홍보|프로모|스폰서|PPL)/,
+      exclude: /(휴식|모험)/,
+    },
+  });
+
+  let cachedLang = null;
+
+  function detectVideoLanguage(playerResponse) {
+    if (cachedLang) return cachedLang;
+
+    const audioLang = playerResponse?.microformat?.playerMicroformatRenderer?.defaultAudioLanguage;
+    if (audioLang) {
+      const code = audioLang.substring(0, 2);
+      if (LANG_PATTERNS[code]) { cachedLang = code; return code; }
+    }
+
+    const defaultLang = playerResponse?.microformat?.playerMicroformatRenderer?.defaultLanguage;
+    if (defaultLang) {
+      const code = defaultLang.substring(0, 2);
+      if (LANG_PATTERNS[code]) { cachedLang = code; return code; }
+    }
+
+    cachedLang = 'en';
+    return 'en';
+  }
+
+  // Exclude blocks weak matches only, not strong
+  function matchesAdPatterns(t, p) {
+    if (p.exclude.test(t)) return p.strong.test(t);
+    return p.strong.test(t) || (p.weak.test(t) && p.context.test(t));
+  }
+
+  function isAdChapterTitle(title, lang) {
+    if (!title || title.length > 200) return false;
+    const t = title.trim();
+    if (INTRO_CHAPTER_PATTERN.test(t) && !INTRO_AD_ALLOW_PATTERN.test(t)) return false;
+    const patterns = LANG_PATTERNS[lang] || LANG_PATTERNS['en'];
+    if (matchesAdPatterns(t, patterns)) return true;
+    return lang !== 'en' && matchesAdPatterns(t, LANG_PATTERNS['en']);
   }
 
   function isIntroChapterTitle(title) {
@@ -203,7 +272,14 @@
 
   // ── Extract Jump ahead segments ──────────────────────────────────────────
 
+  // Caches keyed by data object; lang is stable per video lifecycle (cachedLang
+  // resets on navigation, which also replaces the data objects, invalidating caches).
+  const jumpAheadCache = new WeakMap();
+  const chapterCache = new WeakMap();
+
   function extractJumpAheadSegments(data) {
+    if (!data || typeof data !== 'object') return [];
+    if (jumpAheadCache.has(data)) return jumpAheadCache.get(data);
     const timelyVm = findDeep(data, 'timelyActionsOverlayViewModel');
     const timelyActions = timelyVm?.timelyActions || timelyVm?.timelyActionsOverlayViewModel?.timelyActions;
     if (!Array.isArray(timelyActions)) return [];
@@ -236,12 +312,15 @@
           (seekTargetMs / 1000).toFixed(1) + 's (' + Math.round(delta / 1000) + 's)');
       }
     }
+    jumpAheadCache.set(data, segments);
     return segments;
   }
 
   // ── Extract chapter-break segments ──────────────────────────────────────
 
-  function extractChapterSegments(data) {
+  function extractChapterSegments(data, lang) {
+    if (!data || typeof data !== 'object') return [];
+    if (chapterCache.has(data)) return chapterCache.get(data);
     const segments = [];
 
     // Keep chapter collections separate so "next chapter" stays in the same list.
@@ -269,7 +348,7 @@
 
       for (let i = 0; i < chapters.length; i++) {
         const ch = chapters[i];
-        if (!isAdChapterTitle(ch.title)) continue;
+        if (!isAdChapterTitle(ch.title, lang)) continue;
 
         const nextChapter = chapters[i + 1];
         if (!nextChapter) continue;
@@ -284,10 +363,11 @@
       }
     }
 
+    chapterCache.set(data, segments);
     return segments;
   }
 
-  function extractChapterSegmentsFromPoints(points) {
+  function extractChapterSegmentsFromPoints(points, lang) {
     const segments = [];
     if (!Array.isArray(points) || points.length < 2) return segments;
 
@@ -296,7 +376,7 @@
     for (let i = 0; i < points.length - 1; i++) {
       const ch = points[i];
       const nextChapter = points[i + 1];
-      if (!isAdChapterTitle(ch.title)) continue;
+      if (!isAdChapterTitle(ch.title, lang)) continue;
       if (nextChapter.startMs <= ch.startMs) continue;
 
       segments.push({
@@ -353,6 +433,18 @@
     // Need at least 2 chapters to define a first-chapter boundary
     if (deduped.length < 2) return null;
     return deduped[1].startMs;
+  }
+
+  function filterFirstChapterJumpAhead(jumpAhead, firstChapterEndMs) {
+    if (firstChapterEndMs == null || !jumpAhead.length) return jumpAhead;
+    return jumpAhead.filter(seg => {
+      if (seg.triggerMs < firstChapterEndMs) {
+        console.log('[AutoSkip] Ignoring jump-ahead in first chapter:',
+          seg.label, 'at', (seg.triggerMs / 1000).toFixed(1) + 's');
+        return false;
+      }
+      return true;
+    });
   }
 
   // ── Arm the auto-skip handler ────────────────────────────────────────────
@@ -483,6 +575,7 @@
     const pageData = getPageData();
     const playerResponse = getPlayerResponse();
     const chapterPoints = collectDomChapterPoints();
+    const lang = detectVideoLanguage(playerResponse);
 
     let jumpAhead = [];
     let chapters = [];
@@ -499,12 +592,11 @@
     }
 
     if (settings.skipAdChapter) {
-      const chapterSources = [
-        ...extractChapterSegments(pageData),
-        ...extractChapterSegments(playerResponse),
-        ...extractChapterSegmentsFromPoints(chapterPoints),
+      chapters = [
+        ...extractChapterSegments(pageData, lang),
+        ...extractChapterSegments(playerResponse, lang),
+        ...extractChapterSegmentsFromPoints(chapterPoints, lang),
       ];
-      chapters = chapterSources;
     }
 
     introSegments = extractIntroSegmentsFromPoints(chapterPoints);
@@ -516,17 +608,7 @@
     }
 
     // Ignore jump-ahead segments that trigger during the first video chapter
-    const firstChapterEndAll = getFirstChapterEndMs(pageData, playerResponse);
-    if (firstChapterEndAll != null && jumpAhead.length) {
-      jumpAhead = jumpAhead.filter(seg => {
-        if (seg.triggerMs < firstChapterEndAll) {
-          console.log('[AutoSkip] Ignoring jump-ahead in first chapter:',
-            seg.label, 'at', (seg.triggerMs / 1000).toFixed(1) + 's');
-          return false;
-        }
-        return true;
-      });
-    }
+    jumpAhead = filterFirstChapterJumpAhead(jumpAhead, getFirstChapterEndMs(pageData, playerResponse));
 
     const all = [...jumpAhead, ...chapters];
     if (all.length) armSkip(all);
@@ -538,26 +620,17 @@
     refreshMusicGuard();
     if (isMusicVideo) return;
 
+    const lang = detectVideoLanguage(getPlayerResponse());
     let jumpAhead = settings.skipJumpAhead ? extractJumpAheadSegments(data) : [];
     let chapters = [];
     try {
-      chapters = settings.skipAdChapter ? extractChapterSegments(data) : [];
+      chapters = settings.skipAdChapter ? extractChapterSegments(data, lang) : [];
     } catch (e) {
       console.log('[AutoSkip] Chapter extraction error:', e);
     }
 
     // Ignore jump-ahead segments that trigger during the first video chapter
-    const firstChapterEndNet = getFirstChapterEndMs(data, getPageData(), getPlayerResponse());
-    if (firstChapterEndNet != null && jumpAhead.length) {
-      jumpAhead = jumpAhead.filter(seg => {
-        if (seg.triggerMs < firstChapterEndNet) {
-          console.log('[AutoSkip] Ignoring jump-ahead in first chapter:',
-            seg.label, 'at', (seg.triggerMs / 1000).toFixed(1) + 's');
-          return false;
-        }
-        return true;
-      });
-    }
+    jumpAhead = filterFirstChapterJumpAhead(jumpAhead, getFirstChapterEndMs(data, getPageData(), getPlayerResponse()));
 
     const all = [...jumpAhead, ...chapters];
     if (all.length) armSkip(all);
@@ -568,6 +641,7 @@
   function reset() {
     activeSegments = [];
     lastLogTime = -99999;
+    cachedLang = null;
     clearPendingRetryTimers();
     if (handler && attachedVideo) {
       attachedVideo.removeEventListener('timeupdate', handler);
@@ -616,6 +690,7 @@
 
   window.addEventListener('message', (e) => {
     if (e.source !== window) return;
+    if (e.origin !== 'https://www.youtube.com') return;
     if (e.data?.source !== 'autoskip-config') return;
     if (e.data?.type !== 'settings') return;
     applySettings(e.data.settings);
