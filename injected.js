@@ -454,6 +454,70 @@
   let attachedVideo = null;
   let lastLogTime = -99999;
   let pendingRetryTimers = [];
+  let heartbeatInterval = null;
+
+  // Standalone skip-check — called by timeupdate, playing, seeked, AND heartbeat
+  function checkSkipPoints(video) {
+    if (isMusicVideo) return;
+    if (!video || video.paused) return;
+    const ms = video.currentTime * 1000;
+
+    // Re-arm if user seeked back before a segment's trigger
+    for (const seg of activeSegments) {
+      if (seg.done && ms < seg.triggerMs) seg.done = false;
+    }
+
+    // Status log every 30s
+    if (ms - lastLogTime > 30000) {
+      lastLogTime = ms;
+      const pending = activeSegments.filter(s => !s.done);
+      if (pending.length) {
+        console.log('[AutoSkip] At', (ms / 1000).toFixed(1) + 's |',
+          pending.map(s => s.label + ' @' + (s.triggerMs / 1000).toFixed(1) + 's').join(', '));
+      }
+    }
+
+    for (const seg of activeSegments) {
+      if (seg.done) continue;
+      // Trigger anywhere between start and end of the skip zone
+      if (ms >= seg.triggerMs && ms < seg.seekTargetMs - 500) {
+        console.log('[AutoSkip] Skipping', seg.label, 'at',
+          (ms / 1000).toFixed(1) + 's -> ' + (seg.seekTargetMs / 1000).toFixed(1) + 's');
+
+        const player = document.querySelector('#movie_player');
+        if (player && typeof player.seekTo === 'function') {
+          player.seekTo(seg.seekTargetMs / 1000, true);
+        } else {
+          video.currentTime = seg.seekTargetMs / 1000;
+        }
+
+        setTimeout(() => {
+          const after = video.currentTime * 1000;
+          if (after >= seg.seekTargetMs - 2000) {
+            seg.done = true;
+            const skipSec = Math.round((seg.seekTargetMs - seg.triggerMs) / 1000);
+            console.log('[AutoSkip] Confirmed at', (after / 1000).toFixed(1) + 's');
+            window.postMessage({ source: 'autoskip', type: 'skipped', seconds: skipSec, label: seg.label }, '*');
+          } else {
+            console.log('[AutoSkip] Seek failed, retrying...');
+          }
+        }, 500);
+        break;
+      }
+    }
+  }
+
+  function startHeartbeat(video) {
+    stopHeartbeat();
+    heartbeatInterval = setInterval(() => checkSkipPoints(video), 500);
+  }
+
+  function stopHeartbeat() {
+    if (heartbeatInterval) {
+      clearInterval(heartbeatInterval);
+      heartbeatInterval = null;
+    }
+  }
 
   function attachHandlerIfReady() {
     const video = document.querySelector('video');
@@ -463,58 +527,16 @@
 
     if (handler && attachedVideo) {
       attachedVideo.removeEventListener('timeupdate', handler);
+      attachedVideo.removeEventListener('playing', handler);
+      attachedVideo.removeEventListener('seeked', handler);
     }
 
-    handler = () => {
-      if (isMusicVideo) return;
-      const ms = video.currentTime * 1000;
-
-      // Re-arm if user seeked back before a segment's trigger
-      for (const seg of activeSegments) {
-        if (seg.done && ms < seg.triggerMs) seg.done = false;
-      }
-
-      // Status log every 30s
-      if (ms - lastLogTime > 30000) {
-        lastLogTime = ms;
-        const pending = activeSegments.filter(s => !s.done);
-        if (pending.length) {
-          console.log('[AutoSkip] At', (ms / 1000).toFixed(1) + 's |',
-            pending.map(s => s.label + ' @' + (s.triggerMs / 1000).toFixed(1) + 's').join(', '));
-        }
-      }
-
-      for (const seg of activeSegments) {
-        if (seg.done) continue;
-        // Trigger anywhere between start and end of the skip zone
-        if (ms >= seg.triggerMs && ms < seg.seekTargetMs - 500) {
-          console.log('[AutoSkip] Skipping', seg.label, 'at',
-            (ms / 1000).toFixed(1) + 's -> ' + (seg.seekTargetMs / 1000).toFixed(1) + 's');
-
-          const player = document.querySelector('#movie_player');
-          if (player && typeof player.seekTo === 'function') {
-            player.seekTo(seg.seekTargetMs / 1000, true);
-          } else {
-            video.currentTime = seg.seekTargetMs / 1000;
-          }
-
-          setTimeout(() => {
-            const after = video.currentTime * 1000;
-            if (after >= seg.seekTargetMs - 2000) {
-              seg.done = true;
-              const skipSec = Math.round((seg.seekTargetMs - seg.triggerMs) / 1000);
-              console.log('[AutoSkip] Confirmed at', (after / 1000).toFixed(1) + 's');
-              window.postMessage({ source: 'autoskip', type: 'skipped', seconds: skipSec, label: seg.label }, '*');
-            } else {
-              console.log('[AutoSkip] Seek failed, retrying...');
-            }
-          }, 500);
-          break;
-        }
-      }
-    };
+    handler = () => checkSkipPoints(video);
 
     video.addEventListener('timeupdate', handler);
+    video.addEventListener('playing', handler);
+    video.addEventListener('seeked', handler);
+    startHeartbeat(video);
     attachedVideo = video;
     console.log('[AutoSkip] Handler attached |', activeSegments.length, 'segment(s)');
     return true;
@@ -643,8 +665,11 @@
     lastLogTime = -99999;
     cachedLang = null;
     clearPendingRetryTimers();
+    stopHeartbeat();
     if (handler && attachedVideo) {
       attachedVideo.removeEventListener('timeupdate', handler);
+      attachedVideo.removeEventListener('playing', handler);
+      attachedVideo.removeEventListener('seeked', handler);
     }
     handler = null;
     attachedVideo = null;
