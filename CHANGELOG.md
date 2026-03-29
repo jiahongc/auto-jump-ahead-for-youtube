@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Removed first-chapter guard that was blocking Jump Ahead segments in the first chapter.
+- Added heartbeat polling and extra event listeners for more reliable auto-skip timing.
+- Added periodic button polling in content script to catch skip buttons without mouse interaction.
 - Renamed the extension to `YouTube Skip Assist` for clearer, policy-safe positioning.
 - Updated public-facing copy to emphasize supported skip assistance and metadata-dependent chapter skipping.
 - Tightened chapter matching to avoid false positives.

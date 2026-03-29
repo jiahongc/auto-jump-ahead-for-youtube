@@ -410,43 +410,6 @@
     return segments;
   }
 
-  // ── First-chapter boundary helper ───────────────────────────────────────
-
-  function getFirstChapterEndMs(...dataSources) {
-    // Only use structured YouTube API data — DOM chapter selectors can
-    // produce false positives on videos that have no real chapters.
-    const chapterLists = [];
-    for (const data of dataSources) {
-      if (data) collectChapterLists(data, chapterLists, 0, new WeakSet());
-    }
-    const allPoints = chapterLists
-      .flatMap(rawList => rawList.map(chapterPointFromRenderer).filter(Boolean))
-      .sort((a, b) => a.startMs - b.startMs);
-
-    // Deduplicate by startMs
-    const deduped = [];
-    let lastMs = -1;
-    for (const p of allPoints) {
-      if (p.startMs !== lastMs) { deduped.push(p); lastMs = p.startMs; }
-    }
-
-    // Need at least 2 chapters to define a first-chapter boundary
-    if (deduped.length < 2) return null;
-    return deduped[1].startMs;
-  }
-
-  function filterFirstChapterJumpAhead(jumpAhead, firstChapterEndMs) {
-    if (firstChapterEndMs == null || !jumpAhead.length) return jumpAhead;
-    return jumpAhead.filter(seg => {
-      if (seg.triggerMs < firstChapterEndMs) {
-        console.log('[AutoSkip] Ignoring jump-ahead in first chapter:',
-          seg.label, 'at', (seg.triggerMs / 1000).toFixed(1) + 's');
-        return false;
-      }
-      return true;
-    });
-  }
-
   // ── Arm the auto-skip handler ────────────────────────────────────────────
 
   let activeSegments = [];
@@ -456,10 +419,11 @@
   let pendingRetryTimers = [];
   let heartbeatInterval = null;
 
-  // Standalone skip-check — called by timeupdate, playing, seeked, AND heartbeat
+  const LISTEN_EVENTS = ['timeupdate', 'playing', 'seeked'];
+
+  // Standalone skip-check — called by event listeners AND heartbeat
   function checkSkipPoints(video) {
-    if (isMusicVideo) return;
-    if (!video || video.paused) return;
+    if (isMusicVideo || !video || video.paused || !activeSegments.length) return;
     const ms = video.currentTime * 1000;
 
     // Re-arm if user seeked back before a segment's trigger
@@ -484,7 +448,7 @@
         console.log('[AutoSkip] Skipping', seg.label, 'at',
           (ms / 1000).toFixed(1) + 's -> ' + (seg.seekTargetMs / 1000).toFixed(1) + 's');
 
-        const player = document.querySelector('#movie_player');
+        const player = document.getElementById('movie_player');
         if (player && typeof player.seekTo === 'function') {
           player.seekTo(seg.seekTargetMs / 1000, true);
         } else {
@@ -507,9 +471,12 @@
     }
   }
 
-  function startHeartbeat(video) {
+  function startHeartbeat() {
     stopHeartbeat();
-    heartbeatInterval = setInterval(() => checkSkipPoints(video), 500);
+    // Re-query video each tick to survive DOM replacements
+    heartbeatInterval = setInterval(() => {
+      if (attachedVideo) checkSkipPoints(attachedVideo);
+    }, 500);
   }
 
   function stopHeartbeat() {
@@ -519,24 +486,24 @@
     }
   }
 
+  function detachHandler() {
+    if (handler && attachedVideo) {
+      for (const evt of LISTEN_EVENTS) attachedVideo.removeEventListener(evt, handler);
+    }
+  }
+
   function attachHandlerIfReady() {
     const video = document.querySelector('video');
     if (!video) return false;
 
     if (handler && attachedVideo === video) return true;
 
-    if (handler && attachedVideo) {
-      attachedVideo.removeEventListener('timeupdate', handler);
-      attachedVideo.removeEventListener('playing', handler);
-      attachedVideo.removeEventListener('seeked', handler);
-    }
+    detachHandler();
 
     handler = () => checkSkipPoints(video);
 
-    video.addEventListener('timeupdate', handler);
-    video.addEventListener('playing', handler);
-    video.addEventListener('seeked', handler);
-    startHeartbeat(video);
+    for (const evt of LISTEN_EVENTS) video.addEventListener(evt, handler);
+    startHeartbeat();
     attachedVideo = video;
     console.log('[AutoSkip] Handler attached |', activeSegments.length, 'segment(s)');
     return true;
@@ -629,9 +596,6 @@
       ));
     }
 
-    // Ignore jump-ahead segments that trigger during the first video chapter
-    jumpAhead = filterFirstChapterJumpAhead(jumpAhead, getFirstChapterEndMs(pageData, playerResponse));
-
     const all = [...jumpAhead, ...chapters];
     if (all.length) armSkip(all);
   }
@@ -651,9 +615,6 @@
       console.log('[AutoSkip] Chapter extraction error:', e);
     }
 
-    // Ignore jump-ahead segments that trigger during the first video chapter
-    jumpAhead = filterFirstChapterJumpAhead(jumpAhead, getFirstChapterEndMs(data, getPageData(), getPlayerResponse()));
-
     const all = [...jumpAhead, ...chapters];
     if (all.length) armSkip(all);
   }
@@ -666,11 +627,7 @@
     cachedLang = null;
     clearPendingRetryTimers();
     stopHeartbeat();
-    if (handler && attachedVideo) {
-      attachedVideo.removeEventListener('timeupdate', handler);
-      attachedVideo.removeEventListener('playing', handler);
-      attachedVideo.removeEventListener('seeked', handler);
-    }
+    detachHandler();
     handler = null;
     attachedVideo = null;
   }

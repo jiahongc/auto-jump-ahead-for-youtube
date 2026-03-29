@@ -36,7 +36,7 @@ It also includes an optional, best-effort chapter-based ad skip feature when You
 - `Chapter-Based Ad Skips`: ON
 - Music videos: blocked by default
 - Intro chapters are not skipped unless the chapter title also contains clear ad cues.
-- Jump Ahead is ignored during the first video chapter to avoid false skips on content intros.
+- Jump Ahead fires in any chapter, including the first — YouTube's own data determines when to skip.
 
 ## Limitations
 

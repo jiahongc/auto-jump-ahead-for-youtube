@@ -19,7 +19,8 @@ const SKIP_SELECTORS = [
 ];
 const SKIP_LABEL_PATTERN = /\b(jump ahead|skip (ad|ads|sponsor|promotion))\b/i;
 
-function isVisible(el) {
+function hasLayout(el) {
+  if (!el) return false;
   const r = el.getBoundingClientRect();
   return r.width > 0 && r.height > 0;
 }
@@ -141,16 +142,15 @@ function tryClick() {
 
   for (const sel of SKIP_SELECTORS) {
     const btn = document.querySelector(sel);
-    if (btn && isVisible(btn)) {
-      clickBtn(btn, btn.getAttribute('aria-label') || btn.innerText || 'Jumped ahead');
-      return;
-    }
+    if (!btn) continue;
+    clickBtn(btn, btn.getAttribute('aria-label') || btn.innerText || 'Jumped ahead');
+    return;
   }
 
   const player = document.querySelector('#movie_player, .html5-video-player');
   if (!player) return;
   for (const el of player.querySelectorAll('button, [role="button"]')) {
-    if (!isVisible(el)) continue;
+    if (!hasLayout(el)) continue;
     if (hasSkipLikeClass(el)) {
       clickBtn(el, el.getAttribute('aria-label') || el.innerText || 'Auto skipped');
       return;
@@ -187,24 +187,26 @@ const observer = new MutationObserver(() => {
     tryClick();
   }, 150);
 });
-if (document.body) {
-  observer.observe(document.body, {
+
+function startObserver() {
+  const target = document.body;
+  if (!target) return;
+  observer.observe(target, {
     childList: true,
     subtree: true,
     attributes: true,
     attributeFilter: ['class', 'style', 'aria-label'],
   });
-} else {
-  window.addEventListener('DOMContentLoaded', () => {
-    if (document.body) {
-      observer.observe(document.body, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['class', 'style', 'aria-label'],
-      });
-    }
-  }, { once: true });
 }
+
+if (document.body) {
+  startObserver();
+} else {
+  window.addEventListener('DOMContentLoaded', startObserver, { once: true });
+}
+
+// Periodic poll — catches skip buttons that appear without triggering
+// a tracked DOM mutation (e.g. CSS transitions, opacity animations).
+setInterval(tryClick, 1000);
 
 loadSettings();
