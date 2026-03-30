@@ -38,11 +38,18 @@ It also includes an optional, best-effort chapter-based ad skip feature when You
 - Intro chapters are not skipped unless the chapter title also contains clear ad cues.
 - Jump Ahead fires in any chapter, including the first — YouTube's own data determines when to skip.
 
+## Best Results
+
+This extension works best on videos that have **chapters enabled**. YouTube's Jump Ahead and chapter-based skipping both rely on metadata that YouTube generates over time. Newly uploaded videos often lack Jump Ahead buttons and chapter data, so the extension may have nothing to act on until YouTube processes the video further.
+
+For chapter-based ad skipping specifically, the video must have creator-defined chapters or auto-generated chapters visible in the progress bar.
+
 ## Limitations
 
 - Behavior depends on YouTube UI availability and internal page data.
 - Results may vary by region, account state, experiment bucket, and video type.
 - Some videos simply do not expose a reproducible skip path.
+- Newly uploaded videos may not have Jump Ahead or chapter data available yet.
 
 ## Documentation
 
