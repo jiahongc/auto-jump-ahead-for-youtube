@@ -529,8 +529,13 @@
     pendingRetryTimers = [];
   }
 
+  let backgroundPoll = null;
+
   function scheduleProcessRetries() {
     clearPendingRetryTimers();
+    stopBackgroundPoll();
+
+    // Fast burst for the first 11s after navigation
     const delays = [0, 400, 1000, 2000, 3500, 5500, 8000, 11000];
     for (const delay of delays) {
       const timer = setTimeout(() => {
@@ -539,6 +544,20 @@
       }, delay);
       pendingRetryTimers.push(timer);
     }
+
+    // Slow background poll after the burst — catches data that arrives
+    // late via global variable updates or delayed API responses.
+    // processAllSources() uses WeakMap caches so re-processing the same
+    // data objects is essentially free.
+    backgroundPoll = setInterval(() => {
+      if (activeSegments.length) { stopBackgroundPoll(); return; }
+      processAllSources();
+      attachHandlerIfReady();
+    }, 5000);
+  }
+
+  function stopBackgroundPoll() {
+    if (backgroundPoll) { clearInterval(backgroundPoll); backgroundPoll = null; }
   }
 
   function shouldInspectNetworkUrl(rawUrl) {
@@ -626,6 +645,7 @@
     lastLogTime = -99999;
     cachedLang = null;
     clearPendingRetryTimers();
+    stopBackgroundPoll();
     stopHeartbeat();
     detachHandler();
     handler = null;
@@ -653,13 +673,22 @@
     }
   }, 200);
 
-  // 2. SPA navigation — try immediately, then retry at 500ms + 1500ms
+  // 2. SPA navigation — try immediately, then retry with background poll
   document.addEventListener('yt-navigate-finish', () => {
     console.log('[AutoSkip] Navigation - resetting');
     reset();
     refreshMusicGuard();
     scheduleProcessRetries();
   });
+
+  // 3. YouTube data-ready events — fire when YouTube updates page data
+  //    after the initial load (e.g. late metadata, player state changes).
+  for (const evt of ['yt-page-data-updated', 'yt-navigate-cache-hit']) {
+    document.addEventListener(evt, () => {
+      processAllSources();
+      attachHandlerIfReady();
+    });
+  }
 
   // Keep trying to attach if segments are known but the video element appears later.
   const rootObserver = new MutationObserver(() => {
