@@ -21,12 +21,6 @@ const SKIP_SELECTORS = [
 ];
 const SKIP_LABEL_PATTERN = /\b(jump ahead|skip (ad|ads|sponsor|promotion))\b/i;
 
-function hasLayout(el) {
-  if (!el) return false;
-  const r = el.getBoundingClientRect();
-  return r.width > 0 && r.height > 0;
-}
-
 function hasSkipLikeClass(el) {
   const cls = (el.className || '').toString();
   return /ytp-(?:jump-ahead|ad-skip|skip-ad|skip)/i.test(cls) && !/skip-intro/i.test(cls);
@@ -128,8 +122,6 @@ window.addEventListener('message', (e) => {
   }
 
   if (e.data.type === 'skip-in-progress') {
-    // Data-driven skip is happening in injected.js — suppress button
-    // clicks for 2s to avoid double-skipping the same segment.
     skipInProgress = true;
     clearTimeout(skipInProgressTimer);
     skipInProgressTimer = setTimeout(() => { skipInProgress = false; }, 2000);
@@ -139,90 +131,39 @@ window.addEventListener('message', (e) => {
   if (e.data.type === 'music-video-state') {
     musicVideoBlocked = Boolean(e.data.isMusicVideo);
   }
-
 });
 
 // ── MutationObserver fallback — click skip/jump button ───────────────────
 
 let lastClick = 0;
-let tryClickCount = 0;
 
-function tryClick(source) {
-  tryClickCount++;
-  const dbg = tryClickCount % 5 === 1; // log every 5th call (~5s)
-
-  if (!settings.skipJumpAhead) {
-    if (dbg) console.log('[AutoSkip][content] tryClick BLOCKED: skipJumpAhead=false');
-    return;
-  }
-  if (skipInProgress) {
-    if (dbg) console.log('[AutoSkip][content] tryClick BLOCKED: skipInProgress');
-    return;
-  }
-  if (musicVideoBlocked || isLikelyMusicVideoByDom()) {
-    if (dbg) console.log('[AutoSkip][content] tryClick BLOCKED: music video');
-    return;
-  }
+function tryClick() {
+  if (!settings.skipJumpAhead) return;
+  if (skipInProgress) return;
+  if (musicVideoBlocked || isLikelyMusicVideoByDom()) return;
   if (Date.now() - lastClick < 800) return;
 
-  // Path 1: known selectors (no layout check)
+  // Path 1: known selectors (no layout check needed)
   for (const sel of SKIP_SELECTORS) {
     const btn = document.querySelector(sel);
     if (!btn) continue;
-    const r = btn.getBoundingClientRect();
-    console.log('[AutoSkip][content] FOUND via selector', sel,
-      '| rect:', r.width.toFixed(0) + 'x' + r.height.toFixed(0),
-      '| source:', source);
     clickBtn(btn, btn.getAttribute('aria-label') || btn.innerText || 'Jumped ahead');
     return;
   }
 
-  // Path 2: scan all buttons in player
+  // Path 2: scan all buttons in player — click even without layout since
+  // YouTube hides the overlay (0x0) when controls are not shown.
   const player = document.querySelector('#movie_player, .html5-video-player');
   if (!player) return;
-
-  const candidates = []; // track skip-like elements we find but can't click
   for (const el of player.querySelectorAll('button, [role="button"]')) {
-    const isClass = hasSkipLikeClass(el);
-    const isLabel = hasSkipLikeLabel(el);
-    const layout = hasLayout(el);
-
-    if (isClass || isLabel) {
-      const r = el.getBoundingClientRect();
-      candidates.push({
-        tag: el.tagName,
-        cls: (el.className || '').toString().substring(0, 80),
-        text: (el.innerText || '').substring(0, 40),
-        aria: el.getAttribute('aria-label') || '',
-        w: r.width.toFixed(0),
-        h: r.height.toFixed(0),
-        layout,
-        isClass,
-        isLabel,
-      });
-
-      // Click even without layout — the button may be functionally clickable
-      // but YouTube hides the overlay (0x0) when controls are not shown.
-      if (isClass) {
-        console.log('[AutoSkip][content] CLICKING skip-class button',
-          '| class:', (el.className || '').toString().substring(0, 80),
-          '| layout:', layout, '| source:', source);
-        clickBtn(el, el.getAttribute('aria-label') || el.innerText || 'Auto skipped');
-        return;
-      }
-      if (isLabel) {
-        console.log('[AutoSkip][content] CLICKING skip-label button',
-          '| text:', (el.innerText || '').substring(0, 40),
-          '| layout:', layout, '| source:', source);
-        const label = (el.getAttribute('aria-label') || el.innerText || el.textContent || '').trim() || 'Auto skipped';
-        clickBtn(el, label);
-        return;
-      }
+    if (hasSkipLikeClass(el)) {
+      clickBtn(el, el.getAttribute('aria-label') || el.innerText || 'Auto skipped');
+      return;
     }
-  }
-
-  if (dbg && candidates.length) {
-    console.log('[AutoSkip][content] tryClick: found candidates but did not click:', JSON.stringify(candidates));
+    if (hasSkipLikeLabel(el)) {
+      clickBtn(el, (el.getAttribute('aria-label') || el.innerText || el.textContent || '').trim() || 'Auto skipped');
+      return;
+    }
   }
 }
 
@@ -246,7 +187,7 @@ const observer = new MutationObserver(() => {
   if (clickTimer) return;
   clickTimer = setTimeout(() => {
     clickTimer = null;
-    tryClick('mutation');
+    tryClick();
   }, 150);
 });
 
@@ -269,36 +210,6 @@ if (document.body) {
 
 // Periodic poll — catches skip buttons that appear without triggering
 // a tracked DOM mutation (e.g. CSS transitions, opacity animations).
-setInterval(() => tryClick('poll'), 1000);
-
-// Periodic DOM scan for debugging — logs any skip-like elements present
-// in the player, even if tryClick wouldn't normally log them.
-setInterval(() => {
-  const player = document.querySelector('#movie_player, .html5-video-player');
-  if (!player) return;
-  const found = [];
-  // Check known selectors
-  for (const sel of SKIP_SELECTORS) {
-    const el = document.querySelector(sel);
-    if (el) {
-      const r = el.getBoundingClientRect();
-      found.push({ sel, w: r.width.toFixed(0), h: r.height.toFixed(0), text: (el.innerText || '').substring(0, 30) });
-    }
-  }
-  // Check for any element with "jump" or "skip" in class/aria
-  for (const el of player.querySelectorAll('[class*="jump"], [class*="skip"], [aria-label*="Jump"], [aria-label*="skip"]')) {
-    const r = el.getBoundingClientRect();
-    found.push({
-      tag: el.tagName,
-      cls: (el.className || '').toString().substring(0, 60),
-      aria: el.getAttribute('aria-label') || '',
-      w: r.width.toFixed(0),
-      h: r.height.toFixed(0),
-    });
-  }
-  if (found.length) {
-    console.log('[AutoSkip][content] DOM scan — skip-like elements:', JSON.stringify(found));
-  }
-}, 3000);
+setInterval(tryClick, 1000);
 
 loadSettings();
