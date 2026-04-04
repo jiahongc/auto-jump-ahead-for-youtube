@@ -337,7 +337,7 @@
       }
 
       const delta = seekTargetMs ? seekTargetMs - triggerMs : 0;
-      if (seekTargetMs && delta >= 2000 && delta <= 600000) {
+      if (seekTargetMs && delta >= 2000 && delta <= 600000 && triggerMs >= 10000) {
         segments.push({ label, triggerMs, seekTargetMs });
       }
     }
