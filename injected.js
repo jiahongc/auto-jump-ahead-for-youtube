@@ -11,6 +11,46 @@
     skipAdChapter: true,
   };
 
+  // ── Watch YouTube globals ─────────────────────────────────────────────
+  // YouTube assigns ytInitialPlayerResponse / ytInitialData on page load
+  // but may NOT update them during SPA navigation.  By installing property
+  // setters BEFORE YouTube's code runs (we execute at document_start), we
+  // can detect the exact moment a fresh value is assigned and immediately
+  // trigger processing — no polling delay, no stale-data race.
+
+  let _globalUpdateTimer = null;
+
+  function onGlobalDataUpdated(prop) {
+    console.log('[AutoSkip] Global', prop, 'updated — scheduling process');
+    clearTimeout(_globalUpdateTimer);
+    _globalUpdateTimer = setTimeout(() => {
+      if (typeof processAllSources === 'function') {
+        processAllSources();
+        attachHandlerIfReady();
+      }
+    }, 50);
+  }
+
+  function watchGlobal(prop) {
+    let value = window[prop];
+    try {
+      Object.defineProperty(window, prop, {
+        get() { return value; },
+        set(newValue) {
+          value = newValue;
+          if (newValue && typeof newValue === 'object') onGlobalDataUpdated(prop);
+        },
+        configurable: true,
+        enumerable: true,
+      });
+    } catch (e) {
+      console.log('[AutoSkip] Could not watch', prop, ':', e);
+    }
+  }
+
+  watchGlobal('ytInitialData');
+  watchGlobal('ytInitialPlayerResponse');
+
   // ── Helpers ──────────────────────────────────────────────────────────────
 
   function findDeep(obj, key, depth) {
@@ -64,6 +104,13 @@
     const title = c.title?.simpleText || c.title?.runs?.[0]?.text || '';
     const startMs = parseInt(c.timeRangeStartMillis, 10);
     if (!Number.isFinite(startMs)) return null;
+    // Debug: show raw title bytes so we can see exact characters
+    const codePoints = [...title].map(ch => {
+      const cp = ch.codePointAt(0);
+      return cp > 127 ? `U+${cp.toString(16).toUpperCase().padStart(4, '0')}` : ch;
+    }).join('');
+    console.log('[AutoSkip][DEBUG] Chapter renderer title:', JSON.stringify(title),
+      '| codepoints:', codePoints, '| startMs:', startMs);
     return { title, startMs };
   }
 
@@ -86,12 +133,28 @@
 
     const candidates = [];
     for (const sel of selectors) {
-      for (const el of document.querySelectorAll(sel)) {
-        const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      const elements = document.querySelectorAll(sel);
+      if (elements.length) {
+        console.log('[AutoSkip][DEBUG] DOM selector', JSON.stringify(sel), 'matched', elements.length, 'element(s)');
+      }
+      for (const el of elements) {
+        const rawText = el.textContent || '';
+        const text = rawText.replace(/\s+/g, ' ').trim();
         if (!text) continue;
 
         const timeMatch = text.match(/\b\d{1,2}:\d{2}(?::\d{2})?\b/);
         const titleMatch = text.match(/[\p{L}][\p{L}\p{N}\s'&/\-]{1,}/u);
+
+        // Log every DOM element we inspect so we can see raw text
+        const codePoints = [...text].map(ch => {
+          const cp = ch.codePointAt(0);
+          return cp > 127 ? `U+${cp.toString(16).toUpperCase().padStart(4, '0')}` : ch;
+        }).join('');
+        console.log('[AutoSkip][DEBUG] DOM element text:', JSON.stringify(text),
+          '| codepoints:', codePoints,
+          '| timeMatch:', timeMatch?.[0] || 'none',
+          '| titleMatch:', titleMatch?.[0] || 'none');
+
         if (!timeMatch || !titleMatch) continue;
 
         const startMs = parseTimestampToMs(timeMatch[0]);
@@ -239,12 +302,25 @@
   }
 
   function isAdChapterTitle(title, lang) {
-    if (!title || title.length > 200) return false;
+    if (!title || title.length > 200) {
+      console.log('[AutoSkip][DEBUG] isAdChapterTitle SKIP: empty or too long', JSON.stringify(title));
+      return false;
+    }
     const t = title.trim();
-    if (INTRO_CHAPTER_PATTERN.test(t) && !INTRO_AD_ALLOW_PATTERN.test(t)) return false;
+    if (INTRO_CHAPTER_PATTERN.test(t) && !INTRO_AD_ALLOW_PATTERN.test(t)) {
+      console.log('[AutoSkip][DEBUG] isAdChapterTitle INTRO (not ad):', JSON.stringify(t));
+      return false;
+    }
     const patterns = LANG_PATTERNS[lang] || LANG_PATTERNS['en'];
-    if (matchesAdPatterns(t, patterns)) return true;
-    return lang !== 'en' && matchesAdPatterns(t, LANG_PATTERNS['en']);
+    const strongMatch = patterns.strong.test(t);
+    const weakMatch = patterns.weak.test(t);
+    const contextMatch = patterns.context.test(t);
+    const excludeMatch = patterns.exclude.test(t);
+    const result = matchesAdPatterns(t, patterns) || (lang !== 'en' && matchesAdPatterns(t, LANG_PATTERNS['en']));
+    console.log('[AutoSkip][DEBUG] isAdChapterTitle:', JSON.stringify(t),
+      '| lang:', lang, '| strong:', strongMatch, '| weak:', weakMatch,
+      '| context:', contextMatch, '| exclude:', excludeMatch, '| => AD:', result);
+    return result;
   }
 
   function isIntroChapterTitle(title) {
@@ -272,10 +348,9 @@
 
   // ── Extract Jump ahead segments ──────────────────────────────────────────
 
-  // Caches keyed by data object; lang is stable per video lifecycle (cachedLang
-  // resets on navigation, which also replaces the data objects, invalidating caches).
-  const jumpAheadCache = new WeakMap();
-  const chapterCache = new WeakMap();
+  // Caches keyed by data object; reset on navigation to prevent stale data.
+  let jumpAheadCache = new WeakMap();
+  let chapterCache = new WeakMap();
 
   function extractJumpAheadSegments(data) {
     if (!data || typeof data !== 'object') return [];
@@ -354,7 +429,7 @@
         if (!nextChapter) continue;
 
         segments.push({
-          label: '"' + ch.title + '"',
+          label: ch.title,
           triggerMs: ch.startMs,
           seekTargetMs: nextChapter.startMs,
         });
@@ -380,7 +455,7 @@
       if (nextChapter.startMs <= ch.startMs) continue;
 
       segments.push({
-        label: '"' + ch.title + '"',
+        label: ch.title,
         triggerMs: ch.startMs,
         seekTargetMs: nextChapter.startMs,
       });
@@ -401,7 +476,7 @@
       if (!isIntroChapterTitle(ch.title)) continue;
       if (nextChapter.startMs <= ch.startMs) continue;
       segments.push({
-        label: '"' + ch.title + '"',
+        label: ch.title,
         triggerMs: ch.startMs,
         seekTargetMs: nextChapter.startMs,
       });
@@ -418,27 +493,45 @@
   let lastLogTime = -99999;
   let pendingRetryTimers = [];
   let heartbeatInterval = null;
+  let currentVideoId = null;
+
+  function getCurrentVideoId() {
+    try {
+      const url = new URL(window.location.href);
+      return url.searchParams.get('v') || null;
+    } catch (_) { return null; }
+  }
 
   const LISTEN_EVENTS = ['timeupdate', 'playing', 'seeked'];
 
   // Standalone skip-check — called by event listeners AND heartbeat
+  let checkSkipCallCount = 0;
+
   function checkSkipPoints(video) {
-    if (isMusicVideo || !video || video.paused || !activeSegments.length) return;
+    checkSkipCallCount++;
+    const dbg = checkSkipCallCount % 20 === 1; // log every 20th call (~10s)
+
+    if (isMusicVideo) { if (dbg) console.log('[AutoSkip][injected] checkSkip BLOCKED: isMusicVideo'); return; }
+    if (!video) { if (dbg) console.log('[AutoSkip][injected] checkSkip BLOCKED: no video element'); return; }
+    if (video.paused) { if (dbg) console.log('[AutoSkip][injected] checkSkip: video paused'); return; }
+    if (!activeSegments.length) {
+      if (dbg) console.log('[AutoSkip][injected] checkSkip: no active segments | handler attached:', !!handler);
+      return;
+    }
     const ms = video.currentTime * 1000;
 
-    // Re-arm if user seeked back before a segment's trigger
-    for (const seg of activeSegments) {
-      if (seg.done && ms < seg.triggerMs) seg.done = false;
-    }
+    // Segments stay done once skipped — if the user seeks back, they
+    // intentionally want to watch that section.  Segments only reset
+    // on video navigation (reset() clears activeSegments entirely).
 
-    // Status log every 30s
-    if (ms - lastLogTime > 30000) {
+    // Status log every 10s (more frequent for debugging)
+    if (ms - lastLogTime > 10000) {
       lastLogTime = ms;
       const pending = activeSegments.filter(s => !s.done);
-      if (pending.length) {
-        console.log('[AutoSkip] At', (ms / 1000).toFixed(1) + 's |',
-          pending.map(s => s.label + ' @' + (s.triggerMs / 1000).toFixed(1) + 's').join(', '));
-      }
+      console.log('[AutoSkip][injected] At', (ms / 1000).toFixed(1) + 's |',
+        'segments:', activeSegments.length,
+        '| pending:', pending.length,
+        '| next:', pending.length ? pending[0].label + ' @' + (pending[0].triggerMs / 1000).toFixed(1) + 's' : 'none');
     }
 
     for (const seg of activeSegments) {
@@ -447,6 +540,10 @@
       if (ms >= seg.triggerMs && ms < seg.seekTargetMs - 500) {
         console.log('[AutoSkip] Skipping', seg.label, 'at',
           (ms / 1000).toFixed(1) + 's -> ' + (seg.seekTargetMs / 1000).toFixed(1) + 's');
+
+        // Tell content.js a data-driven skip is in progress so it doesn't
+        // also click the DOM button for the same segment.
+        window.postMessage({ source: 'autoskip', type: 'skip-in-progress' }, '*');
 
         const player = document.getElementById('movie_player');
         if (player && typeof player.seekTo === 'function') {
@@ -530,13 +627,14 @@
   }
 
   let backgroundPoll = null;
+  let backgroundPollStart = 0;
 
   function scheduleProcessRetries() {
     clearPendingRetryTimers();
     stopBackgroundPoll();
 
-    // Fast burst for the first 11s after navigation
-    const delays = [0, 400, 1000, 2000, 3500, 5500, 8000, 11000];
+    // Fast burst for the first 20s after navigation
+    const delays = [0, 300, 600, 1000, 1500, 2000, 3000, 5000, 8000, 11000, 15000, 20000];
     for (const delay of delays) {
       const timer = setTimeout(() => {
         processAllSources();
@@ -545,15 +643,17 @@
       pendingRetryTimers.push(timer);
     }
 
-    // Slow background poll after the burst — catches data that arrives
-    // late via global variable updates or delayed API responses.
-    // processAllSources() uses WeakMap caches so re-processing the same
-    // data objects is essentially free.
+    // Background poll for 60s — catches data that arrives late via global
+    // variable updates or delayed API responses.  Runs regardless of whether
+    // segments have already been found (more may arrive later, e.g. chapters
+    // after jump-ahead data).  processAllSources() uses WeakMap caches so
+    // re-processing the same data objects is essentially free.
+    backgroundPollStart = Date.now();
     backgroundPoll = setInterval(() => {
-      if (activeSegments.length) { stopBackgroundPoll(); return; }
+      if (Date.now() - backgroundPollStart > 60000) { stopBackgroundPoll(); return; }
       processAllSources();
       attachHandlerIfReady();
-    }, 5000);
+    }, 3000);
   }
 
   function stopBackgroundPoll() {
@@ -585,6 +685,25 @@
     const chapterPoints = collectDomChapterPoints();
     const lang = detectVideoLanguage(playerResponse);
 
+    // Check if the global data objects belong to the current video.
+    // If stale, skip the globals but STILL process DOM chapters and
+    // network-intercepted payloads — those may already be correct.
+    const urlVideoId = getCurrentVideoId();
+    const dataVideoId = playerResponse?.videoDetails?.videoId || null;
+    const pageDataVideoId = findDeep(pageData, 'videoId', 0);
+    const globalsStale = urlVideoId && dataVideoId && urlVideoId !== dataVideoId;
+
+    console.log('[AutoSkip][DEBUG] processAllSources:',
+      '| pageData:', !!pageData,
+      '| playerResponse:', !!playerResponse,
+      '| domChapterPoints:', chapterPoints.length,
+      '| lang:', lang,
+      '| isMusicVideo:', isMusicVideo,
+      '| urlVideoId:', urlVideoId,
+      '| dataVideoId:', dataVideoId,
+      '| globalsStale:', globalsStale,
+      '| settings:', JSON.stringify(settings));
+
     let jumpAhead = [];
     let chapters = [];
     let introSegments = [];
@@ -593,18 +712,24 @@
     if (isMusicVideo) return;
 
     if (settings.skipJumpAhead) {
-      jumpAhead = [
-        ...extractJumpAheadSegments(pageData),
-        ...extractJumpAheadSegments(playerResponse),
-      ];
+      // Only extract from globals if they belong to the current video.
+      if (!globalsStale) {
+        jumpAhead = [
+          ...extractJumpAheadSegments(pageData),
+          ...extractJumpAheadSegments(playerResponse),
+        ];
+      }
     }
 
     if (settings.skipAdChapter) {
-      chapters = [
-        ...extractChapterSegments(pageData, lang),
-        ...extractChapterSegments(playerResponse, lang),
-        ...extractChapterSegmentsFromPoints(chapterPoints, lang),
-      ];
+      if (!globalsStale) {
+        chapters = [
+          ...extractChapterSegments(pageData, lang),
+          ...extractChapterSegments(playerResponse, lang),
+        ];
+      }
+      // DOM chapters are always for the current video — process regardless.
+      chapters = [...chapters, ...extractChapterSegmentsFromPoints(chapterPoints, lang)];
     }
 
     introSegments = extractIntroSegmentsFromPoints(chapterPoints);
@@ -630,6 +755,14 @@
     let chapters = [];
     try {
       chapters = settings.skipAdChapter ? extractChapterSegments(data, lang) : [];
+      // Also check DOM chapters — network payloads may not contain chapter
+      // data when it's only available via the rendered page.
+      if (settings.skipAdChapter) {
+        const domPoints = collectDomChapterPoints();
+        if (domPoints.length) {
+          chapters = [...chapters, ...extractChapterSegmentsFromPoints(domPoints, lang)];
+        }
+      }
     } catch (e) {
       console.log('[AutoSkip] Chapter extraction error:', e);
     }
@@ -641,9 +774,19 @@
   // ── Reset on video change ────────────────────────────────────────────────
 
   function reset() {
+    const oldVideoId = currentVideoId;
+    currentVideoId = getCurrentVideoId();
+    console.log('[AutoSkip][DEBUG] reset(): video changed', oldVideoId, '->', currentVideoId,
+      '| clearing', activeSegments.length, 'segment(s)');
     activeSegments = [];
     lastLogTime = -99999;
     cachedLang = null;
+    // Reset music guard so it doesn't persist from a previous music video
+    isMusicVideo = false;
+    hasSentMusicState = false;
+    // Replace caches so stale ytInitialData from previous video can't return old results
+    jumpAheadCache = new WeakMap();
+    chapterCache = new WeakMap();
     clearPendingRetryTimers();
     stopBackgroundPoll();
     stopHeartbeat();
@@ -656,6 +799,23 @@
 
   // Publish initial music guard state as soon as possible.
   refreshMusicGuard();
+
+  // Debug heartbeat — logs overall state every 10s so we can see if
+  // data was found, handler is attached, segments exist, etc.
+  setInterval(() => {
+    const video = document.querySelector('video');
+    console.log('[AutoSkip][injected] HEARTBEAT |',
+      'videoId:', currentVideoId,
+      '| segments:', activeSegments.length,
+      '| pending:', activeSegments.filter(s => !s.done).length,
+      '| handler:', !!handler,
+      '| attachedVideo:', !!attachedVideo,
+      '| isMusicVideo:', isMusicVideo,
+      '| videoEl:', !!video,
+      '| paused:', video?.paused,
+      '| time:', video ? (video.currentTime).toFixed(1) + 's' : 'n/a',
+      '| settings:', JSON.stringify(settings));
+  }, 10000);
 
   // 1. Initial page load — poll for ytInitialData
   let attempts = 0;
@@ -675,7 +835,10 @@
 
   // 2. SPA navigation — try immediately, then retry with background poll
   document.addEventListener('yt-navigate-finish', () => {
-    console.log('[AutoSkip] Navigation - resetting');
+    const newId = getCurrentVideoId();
+    console.log('[AutoSkip] Navigation - resetting for video:', newId,
+      '| previous:', currentVideoId,
+      '| old segments:', activeSegments.length);
     reset();
     refreshMusicGuard();
     scheduleProcessRetries();
@@ -683,21 +846,95 @@
 
   // 3. YouTube data-ready events — fire when YouTube updates page data
   //    after the initial load (e.g. late metadata, player state changes).
-  for (const evt of ['yt-page-data-updated', 'yt-navigate-cache-hit']) {
+  for (const evt of [
+    'yt-page-data-updated',
+    'yt-navigate-cache-hit',
+    'yt-player-updated',
+    'yt-page-data-fetched',
+    'yt-navigate-redirect',
+  ]) {
     document.addEventListener(evt, () => {
       processAllSources();
       attachHandlerIfReady();
     });
   }
 
-  // Keep trying to attach if segments are known but the video element appears later.
+  // Track video element lifecycle — detects replacements and new loads.
+  let monitoredVideo = null;
+
+  function monitorVideoElement() {
+    const video = document.querySelector('video');
+    if (!video || video === monitoredVideo) return;
+
+    monitoredVideo = video;
+    video.addEventListener('loadedmetadata', () => {
+      console.log('[AutoSkip] Video loadedmetadata fired');
+      const newId = getCurrentVideoId();
+      if (newId && newId !== currentVideoId) {
+        reset();
+        refreshMusicGuard();
+        scheduleProcessRetries();
+      } else {
+        // Same video (e.g. quality change) — just re-attach handler.
+        attachHandlerIfReady();
+      }
+    });
+
+    // Re-attach handler immediately if we have pending segments.
+    attachHandlerIfReady();
+  }
+
+  // Keep trying to attach when video element appears or is replaced —
+  // no longer gated on activeSegments so handler is ready before data arrives.
   const rootObserver = new MutationObserver(() => {
-    if (!activeSegments.length) return;
     const currentVideo = document.querySelector('video');
     if (!currentVideo) return;
+    monitorVideoElement();
     if (!handler || attachedVideo !== currentVideo) attachHandlerIfReady();
   });
   rootObserver.observe(document.documentElement || document, { childList: true, subtree: true });
+
+  // 4. Intercept history.pushState / replaceState — YouTube uses these for
+  //    SPA navigation, and yt-navigate-finish can be delayed or skipped.
+  function onHistoryChange() {
+    const newId = getCurrentVideoId();
+    if (newId && newId !== currentVideoId) {
+      console.log('[AutoSkip] History change detected:', currentVideoId, '->', newId);
+      reset();
+      refreshMusicGuard();
+      scheduleProcessRetries();
+    }
+  }
+
+  const origPushState = history.pushState;
+  const origReplaceState = history.replaceState;
+  history.pushState = function (...args) {
+    const result = origPushState.apply(this, args);
+    onHistoryChange();
+    return result;
+  };
+  history.replaceState = function (...args) {
+    const result = origReplaceState.apply(this, args);
+    onHistoryChange();
+    return result;
+  };
+  window.addEventListener('popstate', onHistoryChange);
+
+  // 5. URL-change polling — ultimate fallback in case all event-driven
+  //    navigation detection fails (e.g. YouTube changes its SPA mechanism).
+  let lastPolledVideoId = getCurrentVideoId();
+  setInterval(() => {
+    const newId = getCurrentVideoId();
+    if (newId && newId !== lastPolledVideoId) {
+      lastPolledVideoId = newId;
+      if (newId !== currentVideoId) {
+        console.log('[AutoSkip] URL poll detected video change:', currentVideoId, '->', newId);
+        reset();
+        refreshMusicGuard();
+        scheduleProcessRetries();
+      }
+    }
+  }, 2000);
 
   window.addEventListener('message', (e) => {
     if (e.source !== window) return;
