@@ -319,7 +319,7 @@
     for (const action of timelyActions) {
       const vm = action?.timelyActionViewModel;
       if (!vm) continue;
-      const label = vm.content?.buttonViewModel?.title || vm.content?.buttonViewModel?.accessibilityText || 'Auto skip segment';
+      const label = 'Jumped ahead';
 
       const triggerMs = parseInt(vm.startTimeMilliseconds, 10);
       if (isNaN(triggerMs)) continue;
@@ -381,7 +381,7 @@
         if (!nextChapter) continue;
 
         segments.push({
-          label: ch.title,
+          label: 'Skipped ' + ch.title,
           triggerMs: ch.startMs,
           seekTargetMs: nextChapter.startMs,
         });
@@ -403,7 +403,7 @@
       if (nextChapter.startMs <= ch.startMs) continue;
 
       segments.push({
-        label: ch.title,
+        label: 'Skipped ' + ch.title,
         triggerMs: ch.startMs,
         seekTargetMs: nextChapter.startMs,
       });
@@ -462,23 +462,26 @@
       if (seg.done) continue;
       // Trigger anywhere between start and end of the skip zone
       if (ms >= seg.triggerMs && ms < seg.seekTargetMs - 500) {
+        const fromSec = seg.triggerMs / 1000;
+        const toSec = seg.seekTargetMs / 1000;
+
         // Tell content.js a data-driven skip is in progress so it doesn't
         // also click the DOM button for the same segment.
-        window.postMessage({ source: 'autoskip', type: 'skip-in-progress' }, '*');
+        window.postMessage({ source: 'autoskip', type: 'skip-in-progress', fromSec, toSec }, '*');
 
         const player = document.getElementById('movie_player');
         if (player && typeof player.seekTo === 'function') {
-          player.seekTo(seg.seekTargetMs / 1000, true);
+          player.seekTo(toSec, true);
         } else {
-          video.currentTime = seg.seekTargetMs / 1000;
+          video.currentTime = toSec;
         }
 
         setTimeout(() => {
           const after = video.currentTime * 1000;
           if (after >= seg.seekTargetMs - 2000) {
             seg.done = true;
-            const skipSec = Math.round((seg.seekTargetMs - seg.triggerMs) / 1000);
-            window.postMessage({ source: 'autoskip', type: 'skipped', seconds: skipSec, label: seg.label }, '*');
+            const skipSec = Math.round((after - ms) / 1000);
+            window.postMessage({ source: 'autoskip', type: 'skipped', seconds: skipSec, label: seg.label, fromSec, toSec }, '*');
           }
         }, 500);
         break;
@@ -630,13 +633,17 @@
 
     introSegments = extractIntroSegmentsFromPoints(chapterPoints);
 
-    if (jumpAhead.length && introSegments.length) {
-      jumpAhead = jumpAhead.filter(seg => !introSegments.some(intro =>
-        seg.triggerMs >= intro.triggerMs && seg.triggerMs < intro.seekTargetMs
+    // Drop jump-ahead segments whose trigger falls inside an ad chapter
+    // or intro zone — ad chapters know exact boundaries, and intros should
+    // not be skipped by jump-ahead.
+    const excludeZones = [...chapters, ...introSegments];
+    if (jumpAhead.length && excludeZones.length) {
+      jumpAhead = jumpAhead.filter(seg => !excludeZones.some(z =>
+        seg.triggerMs >= z.triggerMs && seg.triggerMs < z.seekTargetMs
       ));
     }
 
-    const all = [...jumpAhead, ...chapters];
+    const all = [...chapters, ...jumpAhead];
     if (all.length) armSkip(all);
   }
 

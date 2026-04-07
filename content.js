@@ -11,6 +11,7 @@ let settings = { ...DEFAULT_SETTINGS };
 let musicVideoBlocked = false;
 let skipInProgress = false;
 let skipInProgressTimer = null;
+let doneZones = []; // [{from, to}] — time ranges (seconds) already skipped
 
 const SKIP_SELECTORS = [
   '.ytp-jump-ahead-button',
@@ -115,16 +116,19 @@ window.addEventListener('message', (e) => {
   if (e.origin !== 'https://www.youtube.com') return;
   if (e.data?.source !== 'autoskip') return;
 
-  if (e.data.type === 'skipped') {
-    const { seconds: sec, label } = e.data;
-    showToast(sec > 0 ? `${label} · ${sec}s skipped` : label);
-    return;
-  }
-
   if (e.data.type === 'skip-in-progress') {
     skipInProgress = true;
     clearTimeout(skipInProgressTimer);
     skipInProgressTimer = setTimeout(() => { skipInProgress = false; }, 2000);
+    return;
+  }
+
+  if (e.data.type === 'skipped') {
+    const { seconds: sec, label, fromSec, toSec } = e.data;
+    if (fromSec != null && toSec != null) {
+      doneZones.push({ from: fromSec, to: toSec });
+    }
+    showToast(sec > 0 ? `${label} · ${sec}s` : label);
     return;
   }
 
@@ -137,17 +141,25 @@ window.addEventListener('message', (e) => {
 
 let lastClick = 0;
 
+function isInDoneZone() {
+  const video = document.querySelector('video');
+  if (!video) return false;
+  const t = video.currentTime;
+  return doneZones.some(z => t >= z.from && t < z.to);
+}
+
 function tryClick() {
   if (!settings.skipJumpAhead) return;
   if (skipInProgress) return;
   if (musicVideoBlocked || isLikelyMusicVideoByDom()) return;
   if (Date.now() - lastClick < 800) return;
+  if (isInDoneZone()) return;
 
   // Path 1: known selectors (no layout check needed)
   for (const sel of SKIP_SELECTORS) {
     const btn = document.querySelector(sel);
     if (!btn) continue;
-    clickBtn(btn, btn.getAttribute('aria-label') || btn.innerText || 'Jumped ahead');
+    clickBtn(btn, 'Jumped ahead');
     return;
   }
 
@@ -157,11 +169,11 @@ function tryClick() {
   if (!player) return;
   for (const el of player.querySelectorAll('button, [role="button"]')) {
     if (hasSkipLikeClass(el)) {
-      clickBtn(el, el.getAttribute('aria-label') || el.innerText || 'Auto skipped');
+      clickBtn(el, 'Jumped ahead');
       return;
     }
     if (hasSkipLikeLabel(el)) {
-      clickBtn(el, (el.getAttribute('aria-label') || el.innerText || el.textContent || '').trim() || 'Auto skipped');
+      clickBtn(el, 'Jumped ahead');
       return;
     }
   }
@@ -174,8 +186,12 @@ function clickBtn(btn, label) {
   lastClick = Date.now();
   setTimeout(() => {
     if (video && before !== null) {
-      const sec = Math.round(video.currentTime - before);
-      showToast(sec > 0 ? `${label} · ${sec}s skipped` : label);
+      const after = video.currentTime;
+      const sec = Math.round(after - before);
+      if (sec > 2) {
+        doneZones.push({ from: before, to: after });
+      }
+      showToast(sec > 0 ? `${label} · ${sec}s` : label);
     } else {
       showToast(label);
     }
@@ -211,5 +227,8 @@ if (document.body) {
 // Periodic poll — catches skip buttons that appear without triggering
 // a tracked DOM mutation (e.g. CSS transitions, opacity animations).
 setInterval(tryClick, 1000);
+
+// Clear done zones on navigation so they don't persist across videos.
+document.addEventListener('yt-navigate-finish', () => { doneZones = []; });
 
 loadSettings();
