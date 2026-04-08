@@ -27,6 +27,9 @@
     }, 50);
   }
 
+  // Sentinel used to verify our setter is still active.
+  const WATCH_SENTINEL = Symbol('autoskip');
+
   function watchGlobal(prop) {
     let value = window[prop];
     try {
@@ -39,11 +42,25 @@
         configurable: true,
         enumerable: true,
       });
+      // Tag the descriptor so we can detect if it's been overwritten.
+      window[prop + '__autoskip'] = WATCH_SENTINEL;
     } catch (_) {}
+  }
+
+  function ensureWatchers() {
+    for (const prop of ['ytInitialData', 'ytInitialPlayerResponse']) {
+      if (window[prop + '__autoskip'] !== WATCH_SENTINEL) {
+        watchGlobal(prop);
+      }
+    }
   }
 
   watchGlobal('ytInitialData');
   watchGlobal('ytInitialPlayerResponse');
+
+  // YouTube's code may overwrite our property descriptors.
+  // Periodically re-install them if that happens.
+  setInterval(ensureWatchers, 10000);
 
   // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -545,6 +562,7 @@
 
   let backgroundPoll = null;
   let backgroundPollStart = 0;
+  let _slowPoll = null;
 
   function scheduleProcessRetries() {
     clearPendingRetryTimers();
@@ -560,14 +578,29 @@
       pendingRetryTimers.push(timer);
     }
 
-    // Background poll for 60s — catches data that arrives late.
+    // Background poll — catches data that arrives late.
+    // Fast (3s) for the first 60s, then slow (5s) until segments are found.
     // processAllSources() uses WeakMap caches so re-processing is free.
     backgroundPollStart = Date.now();
     backgroundPoll = setInterval(() => {
-      if (Date.now() - backgroundPollStart > 60000) { stopBackgroundPoll(); return; }
       processAllSources();
       attachHandlerIfReady();
+      // After 60s of fast polling, slow down but keep going until we have data.
+      if (Date.now() - backgroundPollStart > 60000 && activeSegments.length) {
+        stopBackgroundPoll();
+      }
     }, 3000);
+
+    // Slow poll that never stops — catches cases where the 60s fast poll
+    // found nothing and the property watcher was overwritten by YouTube.
+    if (!_slowPoll) {
+      _slowPoll = setInterval(() => {
+        if (activeSegments.length) return; // already have data, no-op
+        ensureWatchers();
+        processAllSources();
+        attachHandlerIfReady();
+      }, 5000);
+    }
   }
 
   function stopBackgroundPoll() {
