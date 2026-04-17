@@ -6,6 +6,11 @@ const DEFAULT_SETTINGS = {
   skipJumpAhead: true,
   skipAdChapter: true,
 };
+const DEBUG_PREFIX = '[AutoSkip]';
+
+function debugLog(...args) {
+  console.debug(DEBUG_PREFIX, ...args);
+}
 
 let settings = { ...DEFAULT_SETTINGS };
 let musicVideoBlocked = false;
@@ -27,15 +32,25 @@ function hasSkipLikeClass(el) {
   return /ytp-(?:jump-ahead|ad-skip|skip-ad|skip)/i.test(cls) && !/skip-intro/i.test(cls);
 }
 
-function hasSkipLikeLabel(el) {
-  const text = [
+function getControlText(el) {
+  return [
     el.innerText || '',
     el.textContent || '',
     el.getAttribute('aria-label') || '',
     el.getAttribute('title') || '',
     el.getAttribute('data-title-no-tooltip') || '',
   ].join(' ').replace(/\s+/g, ' ').trim();
+}
+
+function hasSkipLikeLabel(el) {
+  const text = getControlText(el);
   return SKIP_LABEL_PATTERN.test(text);
+}
+
+function hasLayout(el) {
+  if (!el) return false;
+  const rect = el.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
 }
 
 function isLikelyMusicVideoByDom() {
@@ -82,9 +97,14 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
 
-function showToast(msg) {
+function showToast(arg) {
   const player = document.querySelector('#movie_player');
   if (!player) return;
+
+  // Back-compat: allow showToast('message') and showToast({ message, fromSec, toSec })
+  const opts = typeof arg === 'string' ? { message: arg } : (arg || {});
+  const { message = '', fromSec, toSec } = opts;
+  const canUndo = Number.isFinite(fromSec);
 
   let t = document.getElementById('autoskip-toast');
   if (!t) {
@@ -94,19 +114,160 @@ function showToast(msg) {
       position: 'absolute', bottom: '64px', left: '50%',
       transform: 'translateX(-50%)',
       background: 'rgba(0,0,0,0.78)', color: '#fff',
-      padding: '7px 16px', borderRadius: '20px',
+      padding: '7px 8px 7px 16px', borderRadius: '20px',
       fontSize: '16px', fontFamily: 'Roboto, sans-serif',
       fontWeight: '500', letterSpacing: '0.01em',
       zIndex: '9999', pointerEvents: 'none',
       opacity: '0', transition: 'opacity 0.15s ease', whiteSpace: 'nowrap',
+      display: 'flex', alignItems: 'center', gap: '10px',
     });
+
+    const textEl = document.createElement('span');
+    textEl.id = 'autoskip-toast-text';
+    t.appendChild(textEl);
+
+    const undoBtn = document.createElement('button');
+    undoBtn.id = 'autoskip-toast-undo';
+    undoBtn.type = 'button';
+    undoBtn.textContent = '↶ Undo';
+    Object.assign(undoBtn.style, {
+      background: 'rgba(255,255,255,0.14)', color: '#fff',
+      border: '0', borderRadius: '14px',
+      padding: '3px 10px', marginLeft: '2px',
+      font: 'inherit', fontWeight: '600', fontSize: '13px',
+      cursor: 'pointer', pointerEvents: 'auto',
+      transition: 'background 0.15s ease',
+    });
+    undoBtn.addEventListener('mouseenter', () => {
+      undoBtn.style.background = 'rgba(255,255,255,0.26)';
+    });
+    undoBtn.addEventListener('mouseleave', () => {
+      undoBtn.style.background = 'rgba(255,255,255,0.14)';
+    });
+    undoBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const target = Number(undoBtn.dataset.fromSec);
+      const prevTo = Number(undoBtn.dataset.toSec);
+      if (!Number.isFinite(target)) return;
+      const video = document.querySelector('video');
+      if (video) {
+        video.currentTime = Math.max(0, target - 0.25);
+      }
+      // Remove matching done zone so we don't immediately re-skip
+      if (Number.isFinite(prevTo)) {
+        doneZones = doneZones.filter(z => !(Math.abs(z.from - target) < 0.5 && Math.abs(z.to - prevTo) < 0.5));
+      }
+      t.style.opacity = '0';
+      clearTimeout(t._t);
+    });
+    t.appendChild(undoBtn);
+
     player.appendChild(t);
   }
-  // SECURITY: use textContent, never innerHTML — msg contains untrusted chapter titles
-  t.textContent = `⏭  ${msg}`;
+
+  // SECURITY: use textContent, never innerHTML — message contains untrusted chapter titles
+  const textEl = t.querySelector('#autoskip-toast-text');
+  if (textEl) textEl.textContent = `⏭  ${message}`;
+
+  const undoBtn = t.querySelector('#autoskip-toast-undo');
+  if (undoBtn) {
+    undoBtn.style.display = canUndo ? '' : 'none';
+    undoBtn.dataset.fromSec = canUndo ? String(fromSec) : '';
+    undoBtn.dataset.toSec = Number.isFinite(toSec) ? String(toSec) : '';
+  }
+
   t.style.opacity = '1';
   clearTimeout(t._t);
   t._t = setTimeout(() => (t.style.opacity = '0'), 5000);
+}
+
+function formatClock(totalSeconds) {
+  const sec = Math.max(0, Math.round(totalSeconds));
+  const hours = Math.floor(sec / 3600);
+  const minutes = Math.floor((sec % 3600) / 60);
+  const seconds = sec % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function formatSkipDuration(totalSeconds) {
+  const sec = Math.max(0, Math.round(totalSeconds));
+  const hours = Math.floor(sec / 3600);
+  const minutes = Math.floor((sec % 3600) / 60);
+  const seconds = sec % 60;
+  const parts = [];
+  if (hours) parts.push(`${hours}h`);
+  if (minutes) parts.push(`${minutes}m`);
+  if (seconds || !parts.length) parts.push(`${seconds}s`);
+  return parts.join(' ');
+}
+
+function formatToastMessage(label, seconds, fromSec, toSec) {
+  const parts = [];
+  if (label) parts.push(label);
+  if (Number.isFinite(fromSec) && Number.isFinite(toSec)) {
+    parts.push(`${formatClock(fromSec)} → ${formatClock(toSec)}`);
+  } else if (Number.isFinite(toSec)) {
+    parts.push(`to ${formatClock(toSec)}`);
+  }
+  if (Number.isFinite(seconds) && seconds > 0) {
+    parts.push(`+${formatSkipDuration(seconds)}`);
+  }
+  return parts.join(' · ') || label || 'Skipped ahead';
+}
+
+function normalizeSkipLabel(rawLabel, fallback = 'YouTube Jump Ahead') {
+  const label = (rawLabel || '').replace(/\s+/g, ' ').trim();
+  if (!label) return fallback;
+  if (/jump ahead/i.test(label)) return 'YouTube Jump Ahead';
+  if (/skip\s+ad/i.test(label)) return 'Skipped YouTube ad';
+  return label.replace(/^skip\b/i, 'Skipped');
+}
+
+function parseJumpAheadSeconds(text) {
+  if (!text) return null;
+  let totalSeconds = 0;
+  const lower = text.toLowerCase();
+  const matches = lower.matchAll(/(\d+)\s*(hours?|hrs?|hr|minutes?|mins?|min|seconds?|secs?|sec)\b/g);
+  for (const match of matches) {
+    const value = parseInt(match[1], 10);
+    if (!Number.isFinite(value)) continue;
+    const unit = match[2];
+    if (unit.startsWith('hour') || unit.startsWith('hr')) {
+      totalSeconds += value * 3600;
+    } else if (unit.startsWith('min')) {
+      totalSeconds += value * 60;
+    } else {
+      totalSeconds += value;
+    }
+  }
+  return totalSeconds > 0 ? totalSeconds : null;
+}
+
+function directJumpAhead(video, btn) {
+  if (!video || !btn) return false;
+  const text = getControlText(btn);
+  if (!/jump ahead/i.test(text)) return false;
+
+  const deltaSeconds = parseJumpAheadSeconds(text);
+  if (!Number.isFinite(deltaSeconds) || deltaSeconds < 2) return false;
+
+  const nextTime = Math.min(
+    Number.isFinite(video.duration) ? video.duration : video.currentTime + deltaSeconds,
+    video.currentTime + deltaSeconds
+  );
+  if (!Number.isFinite(nextTime) || nextTime <= video.currentTime + 1) return false;
+
+  video.currentTime = nextTime;
+  return true;
+}
+
+function isFullscreenPlayer(player) {
+  const fullscreenEl = document.fullscreenElement;
+  if (!fullscreenEl || !player) return false;
+  return fullscreenEl === player || fullscreenEl.contains(player) || player.contains(fullscreenEl);
 }
 
 // ── Listen for skip notifications from injected.js ───────────────────────
@@ -120,6 +281,7 @@ window.addEventListener('message', (e) => {
     skipInProgress = true;
     clearTimeout(skipInProgressTimer);
     skipInProgressTimer = setTimeout(() => { skipInProgress = false; }, 2000);
+    debugLog('content skip-in-progress', e.data);
     return;
   }
 
@@ -128,7 +290,12 @@ window.addEventListener('message', (e) => {
     if (fromSec != null && toSec != null) {
       doneZones.push({ from: fromSec, to: toSec });
     }
-    showToast(sec > 0 ? `${label} · ${sec}s` : label);
+    debugLog('content skipped', e.data);
+    showToast({
+      message: formatToastMessage(label, sec, fromSec, toSec),
+      fromSec,
+      toSec,
+    });
     return;
   }
 
@@ -159,7 +326,7 @@ function tryClick() {
   for (const sel of SKIP_SELECTORS) {
     const btn = document.querySelector(sel);
     if (!btn) continue;
-    clickBtn(btn, 'Jumped ahead');
+    clickBtn(btn);
     return;
   }
 
@@ -169,32 +336,59 @@ function tryClick() {
   if (!player) return;
   for (const el of player.querySelectorAll('button, [role="button"]')) {
     if (hasSkipLikeClass(el)) {
-      clickBtn(el, 'Jumped ahead');
+      clickBtn(el);
       return;
     }
     if (hasSkipLikeLabel(el)) {
-      clickBtn(el, 'Jumped ahead');
+      clickBtn(el);
       return;
     }
   }
 }
 
-function clickBtn(btn, label) {
+function clickBtn(btn) {
   const video = document.querySelector('video');
+  const player = btn.closest('#movie_player, .html5-video-player') || document.querySelector('#movie_player, .html5-video-player');
   const before = video ? video.currentTime : null;
-  btn.click();
+  const label = normalizeSkipLabel(getControlText(btn));
+  const jumpedDirectly = directJumpAhead(video, btn);
+  debugLog('content clickBtn', {
+    label,
+    jumpedDirectly,
+    fullscreen: isFullscreenPlayer(player),
+    visible: hasLayout(btn),
+  });
+
+  // In fullscreen, never click a hidden DOM button. If YouTube already made
+  // the control visible on its own, clicking it is acceptable.
+  if (!jumpedDirectly) {
+    if (isFullscreenPlayer(player) && !hasLayout(btn)) return;
+    btn.click();
+  }
   lastClick = Date.now();
   setTimeout(() => {
-    if (video && before !== null) {
-      const after = video.currentTime;
-      const sec = Math.round(after - before);
-      if (sec > 2) {
-        doneZones.push({ from: before, to: after });
-      }
-      showToast(sec > 0 ? `${label} · ${sec}s` : label);
-    } else {
+    // Verify the click (or directJumpAhead seek) actually advanced
+    // playback. YouTube's overlay buttons silently no-op when controls
+    // are autohidden, which would otherwise produce a misleading toast
+    // even though nothing happened — and masks the fact that the
+    // data-driven path in injected.js should handle it without a mouse
+    // move on the next heartbeat tick.
+    if (!video || before === null) {
       showToast(label);
+      return;
     }
+    const after = video.currentTime;
+    const sec = Math.round(after - before);
+    if (sec > 2) {
+      doneZones.push({ from: before, to: after });
+      showToast({
+        message: formatToastMessage(label, sec, before, after),
+        fromSec: before,
+        toSec: after,
+      });
+    }
+    // else: click was a no-op (hidden overlay, directJumpAhead rejected).
+    // Stay silent and let injected.js's heartbeat-driven seek fire next.
   }, 300);
 }
 
@@ -229,6 +423,8 @@ if (document.body) {
 setInterval(tryClick, 1000);
 
 // Clear done zones on navigation so they don't persist across videos.
-document.addEventListener('yt-navigate-finish', () => { doneZones = []; });
+document.addEventListener('yt-navigate-finish', () => {
+  doneZones = [];
+});
 
 loadSettings();

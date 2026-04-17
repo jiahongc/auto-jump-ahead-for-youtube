@@ -10,6 +10,79 @@
     skipAdChapter: true,
   };
 
+  const DEBUG_PREFIX = '[AutoSkip]';
+  const jumpAheadDebug = {
+    currentVideoId: null,
+    sources: {},
+    blockers: {},
+    extractedBeforeFilter: [],
+    filteredOut: [],
+    activeSegments: [],
+    lastSkip: null,
+    lastProcess: null,
+  };
+
+  function cloneForDebug(value) {
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch (_) {
+      return value;
+    }
+  }
+
+  function getDebugSnapshot() {
+    const video = document.querySelector('video');
+    return {
+      pageUrl: window.location.href,
+      urlVideoId: getCurrentVideoId(),
+      trackedVideoId: currentVideoId,
+      pageDataVideoId: getDataVideoId(getPageData()),
+      playerResponseVideoId: getDataVideoId(getPlayerResponse()),
+      currentTimeMs: video ? Math.round(video.currentTime * 1000) : null,
+      durationMs: video && Number.isFinite(video.duration) ? Math.round(video.duration * 1000) : null,
+      paused: video ? video.paused : null,
+      readyState: video ? video.readyState : null,
+      musicVideo: isMusicVideo,
+      settings: { ...settings },
+      activeSegments: activeSegments.map(serializeSegment),
+      jumpAhead: cloneForDebug(jumpAheadDebug),
+    };
+  }
+
+  function printJumpAheadDebug() {
+    const snapshot = cloneForDebug(jumpAheadDebug);
+    console.log(DEBUG_PREFIX, 'jumpAhead snapshot', snapshot);
+    return snapshot;
+  }
+
+  function printDebugSnapshot() {
+    const snapshot = getDebugSnapshot();
+    console.log(DEBUG_PREFIX, 'snapshot', snapshot);
+    return snapshot;
+  }
+
+  function reprocessForDebug() {
+    processAllSources();
+    attachHandlerIfReady();
+    return printDebugSnapshot();
+  }
+
+  window.__autoskipDebug = window.__autoskipDebug || {};
+  window.__autoskipDebug.jumpAhead = jumpAheadDebug;
+  window.__autoskipDebug.printJumpAhead = printJumpAheadDebug;
+  window.__autoskipDebug.snapshot = getDebugSnapshot;
+  window.__autoskipDebug.printSnapshot = printDebugSnapshot;
+  window.__autoskipDebug.reprocess = reprocessForDebug;
+  window.__autoskipDebug.help = [
+    '__autoskipDebug.printJumpAhead()',
+    '__autoskipDebug.printSnapshot()',
+    '__autoskipDebug.reprocess()',
+  ];
+
+  function debugLog(...args) {
+    console.debug(DEBUG_PREFIX, ...args);
+  }
+
   // ── Watch YouTube globals ─────────────────────────────────────────────
   // YouTube assigns ytInitialPlayerResponse / ytInitialData on page load
   // but may NOT update them during SPA navigation.  By installing property
@@ -84,6 +157,58 @@
     if (window.ytInitialPlayerResponse) return window.ytInitialPlayerResponse;
     try { return window.ytcfg?.get?.('PLAYER_RESPONSE'); } catch (_) {}
     return null;
+  }
+
+  function getDataVideoId(data) {
+    const candidates = [
+      data?.videoDetails?.videoId,
+      data?.playerResponse?.videoDetails?.videoId,
+      data?.currentVideoEndpoint?.watchEndpoint?.videoId,
+      data?.endpoint?.watchEndpoint?.videoId,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === 'string' && candidate) return candidate;
+    }
+    return null;
+  }
+
+  function resetJumpAheadDebug(videoId) {
+    jumpAheadDebug.currentVideoId = videoId || null;
+    jumpAheadDebug.sources = {};
+    jumpAheadDebug.blockers = {};
+    jumpAheadDebug.extractedBeforeFilter = [];
+    jumpAheadDebug.filteredOut = [];
+    jumpAheadDebug.activeSegments = [];
+    jumpAheadDebug.lastSkip = null;
+    jumpAheadDebug.lastProcess = null;
+  }
+
+  function serializeSegment(seg) {
+    return {
+      label: seg.label,
+      triggerMs: seg.triggerMs,
+      seekTargetMs: seg.seekTargetMs,
+      source: seg.source || null,
+      done: Boolean(seg.done),
+    };
+  }
+
+  function recordJumpAheadSource(name, details) {
+    jumpAheadDebug.sources[name] = {
+      ...(jumpAheadDebug.sources[name] || {}),
+      ...details,
+      updatedAt: Date.now(),
+    };
+  }
+
+  function recordJumpAheadExtraction(sourceName, segments) {
+    if (!segments.length) return;
+    for (const seg of segments) {
+      jumpAheadDebug.extractedBeforeFilter.push({
+        sourceName,
+        ...serializeSegment(seg),
+      });
+    }
   }
 
   function collectChapterLists(node, out, depth, seen) {
@@ -321,13 +446,12 @@
 
   // ── Extract Jump ahead segments ──────────────────────────────────────────
 
-  // Caches keyed by data object; reset on navigation to prevent stale data.
-  let jumpAheadCache = new WeakMap();
+  // Cache chapter extraction only. Jump Ahead extraction is intentionally
+  // re-evaluated because YouTube can populate skip metadata later.
   let chapterCache = new WeakMap();
 
   function extractJumpAheadSegments(data) {
     if (!data || typeof data !== 'object') return [];
-    if (jumpAheadCache.has(data)) return jumpAheadCache.get(data);
     const timelyVm = findDeep(data, 'timelyActionsOverlayViewModel');
     const timelyActions = timelyVm?.timelyActions || timelyVm?.timelyActionsOverlayViewModel?.timelyActions;
     if (!Array.isArray(timelyActions)) return [];
@@ -336,7 +460,9 @@
     for (const action of timelyActions) {
       const vm = action?.timelyActionViewModel;
       if (!vm) continue;
-      const label = 'Jumped ahead';
+      const label = vm?.content?.buttonViewModel?.title ||
+        vm?.content?.buttonViewModel?.accessibilityText ||
+        'YouTube Jump Ahead';
 
       const triggerMs = parseInt(vm.startTimeMilliseconds, 10);
       if (isNaN(triggerMs)) continue;
@@ -354,12 +480,134 @@
       }
 
       const delta = seekTargetMs ? seekTargetMs - triggerMs : 0;
-      if (seekTargetMs && delta >= 2000 && delta <= 600000 && triggerMs >= 10000) {
-        segments.push({ label, triggerMs, seekTargetMs });
+      if (seekTargetMs && delta >= 1000 && delta <= 900000) {
+        segments.push({ label, triggerMs, seekTargetMs, source: 'timely-actions' });
       }
     }
-    jumpAheadCache.set(data, segments);
     return segments;
+  }
+
+  function decodeEntityKey(entityKey) {
+    if (!entityKey || typeof entityKey !== 'string') return '';
+    try { return atob(decodeURIComponent(entityKey)); } catch (_) {}
+    try { return atob(entityKey); } catch (_) {}
+    return '';
+  }
+
+  function extractRecursiveTiming(node, depth) {
+    if (!node || typeof node !== 'object' || (depth || 0) > 12) return null;
+
+    const keys = Object.keys(node);
+    const startKey = keys.find(key => /^start.*(?:ms|millis|milliseconds)$/i.test(key));
+    const endKey = keys.find(key => /^end.*(?:ms|millis|milliseconds)$/i.test(key));
+    const durationKey = keys.find(key => /^duration.*(?:ms|millis|milliseconds)$/i.test(key));
+
+    if (startKey) {
+      const triggerMs = parseInt(node[startKey], 10);
+      let seekTargetMs = endKey ? parseInt(node[endKey], 10) : NaN;
+      if (!Number.isFinite(seekTargetMs) && durationKey) {
+        const durationMs = parseInt(node[durationKey], 10);
+        if (Number.isFinite(durationMs) && durationMs > 0) {
+          seekTargetMs = triggerMs + durationMs;
+        }
+      }
+
+      if (Number.isFinite(triggerMs) && Number.isFinite(seekTargetMs) && seekTargetMs > triggerMs + 500) {
+        return { triggerMs, seekTargetMs };
+      }
+    }
+
+    for (const value of Object.values(node)) {
+      const result = extractRecursiveTiming(value, (depth || 0) + 1);
+      if (result) return result;
+    }
+
+    return null;
+  }
+
+  function extractSmartSkipSegments(data) {
+    if (!data || typeof data !== 'object') return [];
+    const mutations = data?.frameworkUpdates?.entityBatchUpdate?.mutations;
+    if (!Array.isArray(mutations) || !mutations.length) return [];
+
+    const segments = [];
+    for (const mutation of mutations) {
+      if (!mutation?.entityKey || !mutation?.payload) continue;
+      if (!decodeEntityKey(mutation.entityKey).includes('SMART_SKIP')) continue;
+
+      const directTiming = extractRecursiveTiming(mutation.payload, 0);
+      if (directTiming) {
+        segments.push({
+          label: 'YouTube Jump Ahead',
+          triggerMs: directTiming.triggerMs,
+          seekTargetMs: directTiming.seekTargetMs,
+          source: 'smart-skip-recursive',
+        });
+        continue;
+      }
+
+      const list = mutation.payload?.macroMarkersListEntity?.markersList?.markers;
+      if (!Array.isArray(list)) continue;
+
+      const orderedMarkers = list
+        .map(marker => ({
+          startMs: parseInt(marker?.startMillis, 10),
+          durationMs: parseInt(marker?.durationMillis, 10),
+        }))
+        .filter(marker => Number.isFinite(marker.startMs))
+        .sort((a, b) => a.startMs - b.startMs);
+
+      for (let i = 0; i < orderedMarkers.length; i++) {
+        const marker = orderedMarkers[i];
+        let seekTargetMs = null;
+
+        if (Number.isFinite(marker.durationMs) && marker.durationMs > 0) {
+          seekTargetMs = marker.startMs + marker.durationMs;
+        } else if (orderedMarkers[i + 1]?.startMs > marker.startMs) {
+          seekTargetMs = orderedMarkers[i + 1].startMs;
+        }
+
+        if (!Number.isFinite(seekTargetMs) || seekTargetMs <= marker.startMs + 500) continue;
+        segments.push({
+          label: 'YouTube Jump Ahead',
+          triggerMs: marker.startMs,
+          seekTargetMs,
+          source: 'smart-skip-marker',
+        });
+      }
+    }
+
+    return segments;
+  }
+
+  function dedupeJumpAheadSegments(segments) {
+    return Array.from(new Map(
+      segments
+        .filter(seg => Number.isFinite(seg?.triggerMs) && Number.isFinite(seg?.seekTargetMs) && seg.seekTargetMs > seg.triggerMs)
+        .map(seg => [`${seg.triggerMs}|${seg.seekTargetMs}|${seg.label}`, seg])
+    ).values()).sort((a, b) => a.triggerMs - b.triggerMs);
+  }
+
+  function collectJumpAheadSegments(data, sourceName) {
+    const timelySegments = extractJumpAheadSegments(data);
+    const smartSkipSegments = extractSmartSkipSegments(data);
+    const combined = dedupeJumpAheadSegments([...timelySegments, ...smartSkipSegments]);
+
+    recordJumpAheadSource(sourceName, {
+      dataVideoId: getDataVideoId(data),
+      timelySegments: timelySegments.length,
+      smartSkipSegments: smartSkipSegments.length,
+      combinedSegments: combined.length,
+    });
+    recordJumpAheadExtraction(sourceName, combined);
+    debugLog('jump-ahead source', sourceName, {
+      dataVideoId: getDataVideoId(data),
+      timelySegments: timelySegments.length,
+      smartSkipSegments: smartSkipSegments.length,
+      combinedSegments: combined.length,
+    });
+
+    return combined;
   }
 
   // ── Extract chapter-break segments ──────────────────────────────────────
@@ -398,7 +646,7 @@
         if (!nextChapter) continue;
 
         segments.push({
-          label: 'Skipped ' + ch.title,
+          label: 'Skipped chapter: ' + ch.title,
           triggerMs: ch.startMs,
           seekTargetMs: nextChapter.startMs,
         });
@@ -420,7 +668,7 @@
       if (nextChapter.startMs <= ch.startMs) continue;
 
       segments.push({
-        label: 'Skipped ' + ch.title,
+        label: 'Skipped chapter: ' + ch.title,
         triggerMs: ch.startMs,
         seekTargetMs: nextChapter.startMs,
       });
@@ -481,6 +729,13 @@
       if (ms >= seg.triggerMs && ms < seg.seekTargetMs - 500) {
         const fromSec = seg.triggerMs / 1000;
         const toSec = seg.seekTargetMs / 1000;
+        jumpAheadDebug.lastSkip = {
+          phase: 'attempt',
+          attemptedAt: Date.now(),
+          currentTimeMs: Math.round(ms),
+          segment: serializeSegment(seg),
+        };
+        debugLog('attempt skip', jumpAheadDebug.lastSkip);
 
         // Tell content.js a data-driven skip is in progress so it doesn't
         // also click the DOM button for the same segment.
@@ -498,7 +753,24 @@
           if (after >= seg.seekTargetMs - 2000) {
             seg.done = true;
             const skipSec = Math.round((after - ms) / 1000);
+            jumpAheadDebug.lastSkip = {
+              phase: 'success',
+              attemptedAt: Date.now(),
+              currentTimeMs: Math.round(after),
+              seconds: skipSec,
+              segment: serializeSegment(seg),
+            };
+            debugLog('skip success', jumpAheadDebug.lastSkip);
             window.postMessage({ source: 'autoskip', type: 'skipped', seconds: skipSec, label: seg.label, fromSec, toSec }, '*');
+            jumpAheadDebug.activeSegments = activeSegments.map(serializeSegment);
+          } else {
+            jumpAheadDebug.lastSkip = {
+              phase: 'verify-failed',
+              attemptedAt: Date.now(),
+              currentTimeMs: Math.round(after),
+              segment: serializeSegment(seg),
+            };
+            debugLog('skip verification failed', jumpAheadDebug.lastSkip);
           }
         }, 500);
         break;
@@ -552,6 +824,7 @@
       }
     }
 
+    jumpAheadDebug.activeSegments = activeSegments.map(serializeSegment);
     attachHandlerIfReady();
   }
 
@@ -630,12 +903,14 @@
     const pageData = getPageData();
     const playerResponse = getPlayerResponse();
     const chapterPoints = collectDomChapterPoints();
+    const urlVideoId = getCurrentVideoId();
     const lang = detectVideoLanguage(playerResponse);
+    currentVideoId = urlVideoId;
+    resetJumpAheadDebug(urlVideoId);
 
     // Check if the global data objects belong to the current video.
     // If stale, skip the globals but STILL process DOM chapters —
     // those always reflect the current video.
-    const urlVideoId = getCurrentVideoId();
     const dataVideoId = playerResponse?.videoDetails?.videoId || null;
     const globalsStale = urlVideoId && dataVideoId && urlVideoId !== dataVideoId;
 
@@ -644,13 +919,36 @@
     let introSegments = [];
 
     refreshMusicGuard();
+    jumpAheadDebug.blockers.musicVideo = isMusicVideo;
+    jumpAheadDebug.blockers.globalsStale = Boolean(globalsStale);
     if (isMusicVideo) return;
 
-    if (settings.skipJumpAhead && !globalsStale) {
-      jumpAhead = [
-        ...extractJumpAheadSegments(pageData),
-        ...extractJumpAheadSegments(playerResponse),
-      ];
+    if (settings.skipJumpAhead) {
+      for (const source of [
+        { name: 'pageData', data: pageData },
+        { name: 'playerResponse', data: playerResponse },
+      ]) {
+        if (!source.data) continue;
+
+        const sourceVideoId = getDataVideoId(source.data);
+        if (urlVideoId && sourceVideoId && sourceVideoId !== urlVideoId) {
+          recordJumpAheadSource(source.name, {
+            dataVideoId: sourceVideoId,
+            staleSource: true,
+            combinedSegments: 0,
+          });
+          debugLog('skip stale source', source.name, {
+            currentVideoId: urlVideoId,
+            sourceVideoId,
+          });
+          continue;
+        }
+
+        jumpAhead = [
+          ...jumpAhead,
+          ...collectJumpAheadSegments(source.data, source.name),
+        ];
+      }
     }
 
     if (settings.skipAdChapter) {
@@ -666,17 +964,18 @@
 
     introSegments = extractIntroSegmentsFromPoints(chapterPoints);
 
-    // Drop jump-ahead segments whose trigger falls inside an ad chapter
-    // or intro zone — ad chapters know exact boundaries, and intros should
-    // not be skipped by jump-ahead.
-    const excludeZones = [...chapters, ...introSegments];
-    if (jumpAhead.length && excludeZones.length) {
-      jumpAhead = jumpAhead.filter(seg => !excludeZones.some(z =>
-        seg.triggerMs >= z.triggerMs && seg.triggerMs < z.seekTargetMs
-      ));
-    }
-
     const all = [...chapters, ...jumpAhead];
+    jumpAheadDebug.activeSegments = all.map(serializeSegment);
+    jumpAheadDebug.lastProcess = {
+      processedAt: Date.now(),
+      currentVideoId: urlVideoId,
+      globalsStale: Boolean(globalsStale),
+      chapterSegments: chapters.length,
+      introSegments: introSegments.length,
+      jumpAheadSegments: jumpAhead.length,
+      armedSegments: all.length,
+    };
+    debugLog('processAllSources', jumpAheadDebug.lastProcess);
     if (all.length) armSkip(all);
   }
 
@@ -684,16 +983,28 @@
 
   function process(data) {
     refreshMusicGuard();
+    jumpAheadDebug.currentVideoId = getCurrentVideoId();
+    jumpAheadDebug.blockers.musicVideo = isMusicVideo;
     if (isMusicVideo) return;
 
     const lang = detectVideoLanguage(getPlayerResponse());
-    let jumpAhead = settings.skipJumpAhead ? extractJumpAheadSegments(data) : [];
+    const jumpAhead = settings.skipJumpAhead ? collectJumpAheadSegments(data, 'network-payload') : [];
     let chapters = [];
     try {
       chapters = settings.skipAdChapter ? extractChapterSegments(data, lang) : [];
     } catch (_) {}
 
     const all = [...jumpAhead, ...chapters];
+    jumpAheadDebug.activeSegments = all.map(serializeSegment);
+    jumpAheadDebug.lastProcess = {
+      processedAt: Date.now(),
+      currentVideoId: getCurrentVideoId(),
+      source: 'network-payload',
+      chapterSegments: chapters.length,
+      jumpAheadSegments: jumpAhead.length,
+      armedSegments: all.length,
+    };
+    debugLog('process(payload)', jumpAheadDebug.lastProcess);
     if (all.length) armSkip(all);
   }
 
@@ -705,7 +1016,6 @@
     cachedLang = null;
     isMusicVideo = false;
     hasSentMusicState = false;
-    jumpAheadCache = new WeakMap();
     chapterCache = new WeakMap();
     clearPendingRetryTimers();
     stopBackgroundPoll();
@@ -713,6 +1023,8 @@
     detachHandler();
     handler = null;
     attachedVideo = null;
+    resetJumpAheadDebug(currentVideoId);
+    debugLog('reset', { currentVideoId });
   }
 
   // Deduplicated navigation handler — used by all navigation triggers.
@@ -727,18 +1039,33 @@
   // Publish initial music guard state as soon as possible.
   refreshMusicGuard();
 
-  // 1. Initial page load — poll for ytInitialData
+  // 1. Initial page load — poll for ytInitialData, then kick off the same
+  // retry/slow-poll cadence we use for SPA navigation. Direct page loads
+  // (pasted URL, refresh, new tab) never fire yt-navigate-finish, so
+  // without this the data path only scans once — any later population of
+  // timelyActionsOverlayViewModel would be missed until the user's mouse
+  // movement triggered a DOM mutation observed by content.js.
   let attempts = 0;
   const poll = setInterval(() => {
     attempts++;
     if (getPageData() || getPlayerResponse()) {
       clearInterval(poll);
-      processAllSources();
-      attachHandlerIfReady();
+      scheduleProcessRetries();
     } else if (attempts > 50) {
       clearInterval(poll);
+      // Data never arrived via globals — still start the slow poll so
+      // late-arriving network responses or DOM chapter nodes eventually
+      // get processed without user interaction.
+      scheduleProcessRetries();
     }
   }, 200);
+
+  // Attach the video handler + heartbeat as soon as a <video> element
+  // exists, independent of whether segments have been extracted yet.
+  // checkSkipPoints() is a cheap no-op until activeSegments is populated,
+  // and attaching early guarantees we don't miss the first timeupdate
+  // after segments arrive.
+  attachHandlerIfReady();
 
   // 2. SPA navigation
   document.addEventListener('yt-navigate-finish', () => {
