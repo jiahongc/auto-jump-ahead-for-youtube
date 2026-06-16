@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "YouTube Skip Assist",
-  "version": "1.10",
-  "description": "Provides supported YouTube playback skip assistance when available, with optional chapter-based ad skipping.",
+  "name": "Auto Jump Ahead for YouTube",
+  "version": "1.12",
+  "description": "Automatically uses YouTube's built-in Jump Ahead and skips video chapters creators label as sponsor or ad segments.",
   "permissions": [
     "storage"
   ],

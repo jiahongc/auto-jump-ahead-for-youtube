@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.12
+
+Store-submission prep: renamed the extension to `Auto Jump Ahead for YouTube` (the `… for YouTube` form avoids implying official affiliation, the main trademark-rejection risk) and rewrote the store description to state plainly that it is not an ad blocker — it only automates skip actions YouTube already provides. Updated `docs/CHROME_WEB_STORE.md` into a fill-in submission sheet. Name propagated across manifest, README, popup, and privacy pages.
+
+Jump Ahead reliability: remove the cases where a skip only fired after mouse interaction.
+
+- Parse the `yt-navigate-finish` event `detail` payload directly. On SPA and cache-hit navigation the window globals often keep the previous video's data and no interceptable network request fires — the fresh watch response rides in the event itself.
+- Added the live player API (`movie_player.getPlayerResponse()`) as a third data source; it always reflects the current video, immune to stale globals.
+- DOM button sightings now feed the data path: when content.js sees YouTube's own Jump Ahead/skip button (even hidden) and nothing is armed for the current time, injected.js reprocesses all sources instead of relying on a DOM click that silently no-ops while controls are hidden. No-op clicks trigger the same reprocess.
+- Broadened seek-command extraction across known wrapper shapes (`serialCommand` → `commandExecutorCommand` → direct `innertubeCommand`), still as an explicit ordered path — no blind deep search.
+- Match `timelyActions` lists anywhere in payloads (all occurrences) instead of only the first `timelyActionsOverlayViewModel` container.
+- Debug surface fixes: `filteredOut` now actually records dropped segments with reasons (incl. onTap shape summaries for payload-drift diagnosis), network-payload source records survive `processAllSources()` runs, `jumpAhead.activeSegments` mirrors the real armed list, and button sightings are recorded under `domButtonSightings`.
+
+## 1.11
+
+- Restored an opening-seconds grace: no auto-skip while playback is under 5s, so opening a video no longer skips the instant it starts (regression from 1.10 dropping the lead-in guard). Applies to jump-ahead, `SMART_SKIP`, and ad-chapter segments, in both the data and DOM-click paths.
+
 ## 1.10
 
 - Redesigned the Jump Ahead toast notification: shows `label · from → to · +duration` (e.g. `YouTube Jump Ahead · 2:14 → 2:36 · +22s`) instead of a flat one-line status.

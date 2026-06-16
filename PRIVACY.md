@@ -1,6 +1,6 @@
 # Privacy Policy
 
-Extension: **YouTube Skip Assist**  
+Extension: **Auto Jump Ahead for YouTube**  
 Effective date: **March 6, 2026**
 
 ## Summary
@@ -52,4 +52,4 @@ jiahong1996@gmail.com
 
 You may also open an issue:
 
-https://github.com/jiahongc/youtube-skip-assist/issues
+https://github.com/jiahongc/auto-jump-ahead-for-youtube/issues

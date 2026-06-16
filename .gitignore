@@ -1,1 +1,4 @@
 dist/
+.claude/
+docs/brainstorms/
+docs/plans/

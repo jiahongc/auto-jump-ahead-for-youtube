@@ -40,72 +40,6 @@ def rounded_rect_alpha(px, py, left, top, right, bottom, radius):
     return d <= radius
 
 
-def in_segment(px, py, x1, y1, x2, y2, thickness):
-    vx, vy = x2 - x1, y2 - y1
-    wx, wy = px - x1, py - y1
-    c1 = vx * wx + vy * wy
-    if c1 <= 0:
-      return math.hypot(px - x1, py - y1) <= thickness
-    c2 = vx * vx + vy * vy
-    if c2 <= c1:
-      return math.hypot(px - x2, py - y2) <= thickness
-    b = c1 / c2
-    bx, by = x1 + b * vx, y1 + b * vy
-    return math.hypot(px - bx, py - by) <= thickness
-
-
-FONT_5X7 = {
-    "A": [
-        "01110",
-        "10001",
-        "10001",
-        "11111",
-        "10001",
-        "10001",
-        "10001",
-    ],
-    "D": [
-        "11110",
-        "10001",
-        "10001",
-        "10001",
-        "10001",
-        "10001",
-        "11110",
-    ],
-    "S": [
-        "01111",
-        "10000",
-        "10000",
-        "01110",
-        "00001",
-        "00001",
-        "11110",
-    ],
-}
-
-
-def text_pixel(px, py):
-    # Text bounds in normalized coordinates (center badge).
-    left, top = 0.315, 0.39
-    scale = 0.021
-    spacing = 0.012
-    text = "ADS"
-    cursor = left
-    for ch in text:
-        glyph = FONT_5X7[ch]
-        gw = 5 * scale
-        gh = 7 * scale
-        if cursor <= px <= cursor + gw and top <= py <= top + gh:
-            gx = int((px - cursor) / scale)
-            gy = int((py - top) / scale)
-            gx = min(4, max(0, gx))
-            gy = min(6, max(0, gy))
-            return glyph[gy][gx] == "1"
-        cursor += gw + spacing
-    return False
-
-
 def icon_pixel(x, y, size):
     px = (x + 0.5) / size
     py = (y + 0.5) / size
@@ -114,39 +48,27 @@ def icon_pixel(x, y, size):
     if not rounded_rect_alpha(px, py, 0.06, 0.06, 0.94, 0.94, 0.20):
         return (0, 0, 0, 0)
 
-    # Red gradient background with subtle highlight.
-    grad = 1.0 - (0.65 * py + 0.35 * px)
+    # Indigo gradient background. Deliberately NOT YouTube red, and no
+    # play-button-in-red-square shape, to avoid implying affiliation with
+    # YouTube/Google in the Chrome Web Store listing.
+    grad = 1.0 - (0.6 * py + 0.4 * px)
     grad = max(0.0, min(1.0, grad))
-    r = int(190 + 65 * grad)
-    g = int(8 + 30 * grad)
-    b = int(10 + 20 * grad)
+    r = int(60 + 40 * grad)
+    g = int(72 + 52 * grad)
+    b = int(196 + 44 * grad)
 
-    highlight = max(0.0, 1.0 - ((px - 0.28) ** 2 + (py - 0.20) ** 2) / 0.08)
-    r = min(255, int(r + 12 * highlight))
-    g = min(255, int(g + 6 * highlight))
-    b = min(255, int(b + 6 * highlight))
+    # Soft top-left highlight.
+    highlight = max(0.0, 1.0 - ((px - 0.28) ** 2 + (py - 0.20) ** 2) / 0.09)
+    r = min(255, int(r + 18 * highlight))
+    g = min(255, int(g + 18 * highlight))
+    b = min(255, int(b + 12 * highlight))
 
-    # ADS label area.
-    badge = rounded_rect_alpha(px, py, 0.28, 0.37, 0.65, 0.58, 0.05)
-    if badge:
-        if text_pixel(px, py):
-            return (255, 255, 255, 255)
-        # light badge fill
-        br = min(255, r + 25)
-        bg = min(255, g + 25)
-        bb = min(255, b + 25)
-        # strike-through over ADS
-        if in_segment(px, py, 0.30, 0.56, 0.63, 0.39, 0.012):
-            return (255, 255, 255, 255)
-        return (br, bg, bb, 255)
-
-    # Skip symbol: two play triangles + right-side bar.
-    tri1 = in_triangle(px, py, 0.20, 0.26, 0.20, 0.74, 0.47, 0.50)
-    tri2 = in_triangle(px, py, 0.43, 0.26, 0.43, 0.74, 0.70, 0.50)
-    bar = (0.73 <= px <= 0.81) and (0.26 <= py <= 0.74)
-    symbol = tri1 or tri2 or bar
-
-    if symbol:
+    # Skip-to-next glyph: two triangles + right bar. This is the generic
+    # media "skip forward" control, centered on the canvas.
+    tri1 = in_triangle(px, py, 0.20, 0.28, 0.20, 0.72, 0.46, 0.50)
+    tri2 = in_triangle(px, py, 0.43, 0.28, 0.43, 0.72, 0.69, 0.50)
+    bar = (0.72 <= px <= 0.80) and (0.28 <= py <= 0.72)
+    if tri1 or tri2 or bar:
         return (255, 255, 255, 255)
     return (r, g, b, 255)
 

@@ -1,14 +1,16 @@
-# YouTube Skip Assist
+# Auto Jump Ahead for YouTube
 
-Chrome extension that provides supported YouTube playback skip assistance.
+Chrome extension that automatically uses YouTube's built-in Jump Ahead control when YouTube offers it.
 
 It also includes an optional, best-effort chapter-based ad skip feature when YouTube exposes usable chapter metadata.
+
+> Not an ad blocker: it does not block, remove, or skip the video ads YouTube plays before or during a video. It only automates skip actions YouTube already provides. Not affiliated with, endorsed by, or sponsored by YouTube or Google LLC.
 
 ## Quick Start
 
 1. Clone the repo:
    ```bash
-   git clone https://github.com/jiahongc/youtube-skip-assist.git
+   git clone https://github.com/jiahongc/auto-jump-ahead-for-youtube.git
    ```
 2. Open Chrome at `chrome://extensions/`.
 3. Enable **Developer mode**.
@@ -57,7 +59,7 @@ For chapter-based ad skipping specifically, the video must have creator-defined 
 - Troubleshooting: [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)
 - Chrome Web Store reference: [docs/CHROME_WEB_STORE.md](./docs/CHROME_WEB_STORE.md)
 - Changelog: [CHANGELOG.md](./CHANGELOG.md)
-- Privacy policy page: https://jiahongc.github.io/youtube-skip-assist/privacy.html
+- Privacy policy page: https://jiahongc.github.io/auto-jump-ahead-for-youtube/privacy.html
 - Privacy markdown fallback: [PRIVACY.md](./PRIVACY.md)
 
 ## Permissions

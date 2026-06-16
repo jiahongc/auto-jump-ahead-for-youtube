@@ -7,6 +7,8 @@ const DEFAULT_SETTINGS = {
   skipAdChapter: true,
 };
 const DEBUG_PREFIX = '[AutoSkip]';
+// Match injected.js: never skip in the opening seconds of playback.
+const SKIP_GRACE_MS = 5000;
 
 function debugLog(...args) {
   console.debug(DEBUG_PREFIX, ...args);
@@ -315,35 +317,67 @@ function isInDoneZone() {
   return doneZones.some(z => t >= z.from && t < z.to);
 }
 
-function tryClick() {
+function findSkipButton() {
+  // Path 1: known selectors (no layout check needed)
+  for (const sel of SKIP_SELECTORS) {
+    const btn = document.querySelector(sel);
+    if (btn) return btn;
+  }
+
+  // Path 2: scan all buttons in player — match even without layout since
+  // YouTube hides the overlay (0x0) when controls are not shown.
+  const player = document.querySelector('#movie_player, .html5-video-player');
+  if (!player) return null;
+  for (const el of player.querySelectorAll('button, [role="button"]')) {
+    if (hasSkipLikeClass(el) || hasSkipLikeLabel(el)) return el;
+  }
+  return null;
+}
+
+// Report button sightings to injected.js. A sighting means YouTube has
+// segment data client-side right now — injected.js uses it to reprocess
+// its data sources when nothing is armed, covering the case where a DOM
+// click would silently no-op against a hidden overlay.
+let lastSightingKey = null;
+
+function reportButtonEvent(btn, kind) {
+  if (!btn) {
+    lastSightingKey = null;
+    return;
+  }
+  const label = getControlText(btn).slice(0, 80);
+  const visible = hasLayout(btn);
+  if (kind === 'sighting') {
+    const key = `${label}|${visible}`;
+    if (key === lastSightingKey) return;
+    lastSightingKey = key;
+  }
+  window.postMessage({
+    source: 'autoskip-dom',
+    type: 'jump-button-event',
+    kind,
+    label,
+    visible,
+  }, '*');
+}
+
+function scanForSkipButton() {
+  const btn = findSkipButton();
+  reportButtonEvent(btn, 'sighting');
+  if (btn) tryClick(btn);
+}
+
+function tryClick(btn) {
   if (!settings.skipJumpAhead) return;
   if (skipInProgress) return;
   if (musicVideoBlocked || isLikelyMusicVideoByDom()) return;
   if (Date.now() - lastClick < 800) return;
   if (isInDoneZone()) return;
 
-  // Path 1: known selectors (no layout check needed)
-  for (const sel of SKIP_SELECTORS) {
-    const btn = document.querySelector(sel);
-    if (!btn) continue;
-    clickBtn(btn);
-    return;
-  }
+  const graceVideo = document.querySelector('video');
+  if (graceVideo && graceVideo.currentTime * 1000 < SKIP_GRACE_MS) return;
 
-  // Path 2: scan all buttons in player — click even without layout since
-  // YouTube hides the overlay (0x0) when controls are not shown.
-  const player = document.querySelector('#movie_player, .html5-video-player');
-  if (!player) return;
-  for (const el of player.querySelectorAll('button, [role="button"]')) {
-    if (hasSkipLikeClass(el)) {
-      clickBtn(el);
-      return;
-    }
-    if (hasSkipLikeLabel(el)) {
-      clickBtn(el);
-      return;
-    }
-  }
+  clickBtn(btn);
 }
 
 function clickBtn(btn) {
@@ -386,9 +420,12 @@ function clickBtn(btn) {
         fromSec: before,
         toSec: after,
       });
+    } else {
+      // Click was a no-op (hidden overlay, directJumpAhead rejected).
+      // Stay silent, but tell injected.js so it can reprocess its data
+      // sources — its heartbeat seek works even with controls hidden.
+      reportButtonEvent(btn, 'click-noop');
     }
-    // else: click was a no-op (hidden overlay, directJumpAhead rejected).
-    // Stay silent and let injected.js's heartbeat-driven seek fire next.
   }, 300);
 }
 
@@ -397,7 +434,7 @@ const observer = new MutationObserver(() => {
   if (clickTimer) return;
   clickTimer = setTimeout(() => {
     clickTimer = null;
-    tryClick();
+    scanForSkipButton();
   }, 150);
 });
 
@@ -420,7 +457,7 @@ if (document.body) {
 
 // Periodic poll — catches skip buttons that appear without triggering
 // a tracked DOM mutation (e.g. CSS transitions, opacity animations).
-setInterval(tryClick, 1000);
+setInterval(scanForSkipButton, 1000);
 
 // Clear done zones on navigation so they don't persist across videos.
 document.addEventListener('yt-navigate-finish', () => {
