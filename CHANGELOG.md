@@ -1,8 +1,15 @@
 # Changelog
 
-## 1.12
+## 1.13
 
-Store-submission prep: renamed the extension to `Auto Jump Ahead for YouTube` (the `… for YouTube` form avoids implying official affiliation, the main trademark-rejection risk) and rewrote the store description to state plainly that it is not an ad blocker — it only automates skip actions YouTube already provides. Updated `docs/CHROME_WEB_STORE.md` into a fill-in submission sheet. Name propagated across manifest, README, popup, and privacy pages.
+Chrome Web Store submission prep (no behavior change):
+
+- Renamed the extension to `Auto Jump Ahead for YouTube`. The `… for YouTube` form avoids implying official affiliation, which is the main trademark-rejection risk. Name propagated across manifest, README, popup, and privacy pages.
+- Replaced the red, YouTube-style play-button icon with a neutral indigo skip-forward glyph to avoid a trademark/affiliation rejection.
+- Reworded the store description to state plainly that this is not an ad blocker — it only automates skip actions YouTube already provides. Rewrote `docs/CHROME_WEB_STORE.md` into a fill-in submission sheet.
+- Renamed the GitHub repo to `auto-jump-ahead-for-youtube` and updated all URLs, including the GitHub Pages privacy-policy link.
+
+## 1.12
 
 Jump Ahead reliability: remove the cases where a skip only fired after mouse interaction.
 
